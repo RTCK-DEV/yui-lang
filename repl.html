@@ -641,8 +641,18 @@ class Parser {
   }
 
   parseExprFrom(toks) {
-    const sub = new Parser([...toks, {kind:"NEWLINE",value:"\n",line:0}, {kind:"EOF",value:null,line:0}]);
-    return sub.parseCallOrExpr();
+    // yui.py の _parse_expr_from と同じ順序：まず式として解析し、
+    // トークンが余った場合にかぎり「項助詞…動詞」の呼び出しとして解釈し直す。
+    // 呼び出しを先に試すと「i が B 以下」の tail が [B, 以下] になり、
+    // 単独比較語ガードをすり抜けて関数「B以下」の呼び出しになってしまう。
+    const pad = () => [{kind:"NEWLINE",value:"\n",line:0}, {kind:"EOF",value:null,line:0}];
+    const sub = new Parser([...toks, ...pad()]);
+    const node = sub.parseExpr();
+    if (!(sub.check("NEWLINE") || sub.check("EOF"))) {
+      const sub2 = new Parser([...toks, ...pad()]);
+      return sub2.parseCallOrExpr();
+    }
+    return node;
   }
 
   parseCallFrom(toks, isCmd) {
@@ -1207,14 +1217,16 @@ function _toFloat(args) { return parseFloat(args["を"]); }
 function _append(args, env) {
   const target = args["に"] !== undefined ? args["に"] : env.getTopic();
   const item = args["を"];
-  if (!Array.isArray(target)) throw new RuntimeYuiError("追加先は配列");
+  if (target === null || target === undefined) throw new RuntimeYuiError("追加先がありません");
+  if (!Array.isArray(target)) throw new RuntimeYuiError("「追加」の追加先は配列です");
   target.push(item);
   return null;
 }
 function _appendTail(args, env) {
   let target = args["へ"];
   if (target === undefined) target = env.getTopic();
-  if (!Array.isArray(target)) throw new RuntimeYuiError("「末尾へ」は配列に対して使います");
+  if (target === null || target === undefined) throw new RuntimeYuiError("追加先がありません");
+  if (!Array.isArray(target)) throw new RuntimeYuiError("「末尾追加」の追加先は配列です");
   target.push(args["を"]);
   return null;
 }

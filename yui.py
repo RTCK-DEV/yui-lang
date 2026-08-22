@@ -1449,21 +1449,25 @@ def _bi_to_float(args, env):
     return float(args.get("を"))
 
 def _bi_append(args, env):
+    """<配列>に X を 追加せよ ／ 主題ブロック内では X を 追加せよ"""
     target = args.get("に", env.get_topic())
     item = args.get("を")
-    if target is None: raise RuntimeYuiError("追加先がありません")
+    if target is None:
+        raise RuntimeYuiError("追加先がありません")
+    if not isinstance(target, list):
+        raise RuntimeYuiError("「追加」の追加先は配列です")
     target.append(item)
     return None
 
 def _bi_append_tail(args, env):
-    """末尾へ X を 追加せよ"""
+    """<配列>へ X を 末尾追加せよ ／ 主題ブロック内では X を 末尾追加せよ"""
     target = args.get("へ")
     if target is None:
         target = env.get_topic()
-        if isinstance(target, list):
-            pass
-        else:
-            raise RuntimeYuiError("「末尾へ」は配列に対して使います")
+    if target is None:
+        raise RuntimeYuiError("追加先がありません")
+    if not isinstance(target, list):
+        raise RuntimeYuiError("「末尾追加」の追加先は配列です")
     item = args.get("を")
     target.append(item)
     return None
