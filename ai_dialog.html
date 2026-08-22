@@ -1,0 +1,2335 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIダイアログ ── 結（Yui）× WebLLM Multi-Agent</title>
+<style>
+  :root {
+    --bg-grad-1: #2a2330; --bg-grad-2: #1a1a2a;
+    --code-bg: #0e1018; --panel: rgba(24,26,34,0.92);
+    --text: #f0e8d8; --text-dim: #c0b8a8; --muted: #7a7268;
+    --accent: #d97757; --accent-soft: rgba(217,119,87,0.18);
+    --keyword: #d97757; --string: #a8c98a; --particle: #6f9bd1;
+    --comment: #5d6478; --num: #d8a05f;
+    --border: rgba(217,119,87,0.30); --border-soft: rgba(217,119,87,0.12);
+    --aoi: #d97757; --sakura: #e8a5b8; --narrator: #a8c98a; --tr: #6f9bd1;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: linear-gradient(135deg, var(--bg-grad-1), var(--bg-grad-2));
+    color: var(--text); font-family: "Hiragino Sans", "Yu Gothic UI", system-ui, sans-serif;
+  }
+  body { display: flex; flex-direction: column; height: 100vh; }
+  header {
+    padding: 10px 18px; background: rgba(0,0,0,0.4); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; flex-shrink: 0; flex-wrap: wrap;
+  }
+  h1 { margin: 0; font-size: 14px; font-weight: 500; letter-spacing: 0.1em; }
+  h1 .mark { color: var(--accent); margin-right: 6px; }
+  .modes { display: flex; gap: 4px; margin-left: 12px; }
+  .modes button {
+    background: transparent; border: 1px solid var(--border-soft); color: var(--text-dim);
+    padding: 4px 10px; border-radius: 3px; font-size: 12px; cursor: pointer; font-family: inherit;
+  }
+  .modes button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .modes button:hover:not(.active) { background: var(--accent-soft); }
+  .toolbar { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  button.ctrl {
+    background: transparent; color: var(--text); border: 1px solid var(--border);
+    padding: 6px 14px; border-radius: 4px; font: inherit; font-size: 13px; cursor: pointer;
+    font-family: inherit;
+  }
+  button.ctrl:hover { background: var(--accent-soft); }
+  button.ctrl.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.ctrl.danger { background: #8a3a3a; border-color: #b04a4a; color: #fff; }
+  button.ctrl:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  main {
+    flex: 1; display: grid; grid-template-columns: 280px 1fr 1fr; gap: 1px;
+    background: var(--border-soft); min-height: 0;
+  }
+  .pane { background: var(--bg-grad-2); display: flex; flex-direction: column; min-height: 0; }
+  .pane-head {
+    padding: 8px 14px; font-size: 10px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.18em;
+    border-bottom: 1px solid var(--border-soft);
+    display: flex; justify-content: space-between; align-items: center;
+    background: rgba(0,0,0,0.18); flex-shrink: 0;
+  }
+  .pane-head .ind { color: var(--accent); font-family: "SF Mono", monospace; text-transform: none; letter-spacing: 0; font-size: 11px; }
+
+  /* ── パラメータパネル ─────── */
+  #param-pane { overflow-y: auto; }
+  .param-section { padding: 12px 14px; border-bottom: 1px solid var(--border-soft); }
+  .param-section h3 { margin: 0 0 8px; font-size: 11px; color: var(--accent); letter-spacing: 0.15em; text-transform: uppercase; font-weight: 500; }
+  .param-row { display: flex; align-items: center; gap: 8px; margin: 5px 0; font-size: 12px; }
+  .param-row label { flex: 1; color: var(--text-dim); }
+  .param-row input[type=range] { flex: 1; }
+  .param-row input[type=number] { width: 60px; background: var(--code-bg); border: 1px solid var(--border-soft); color: var(--text); padding: 3px 6px; border-radius: 3px; font: inherit; font-size: 12px; }
+  .param-row .v { width: 40px; text-align: right; color: var(--accent); font-family: "SF Mono", monospace; font-size: 11px; }
+  .param-row input[type=checkbox] { accent-color: var(--accent); }
+  .prompt-edit { width: 100%; min-height: 80px; background: var(--code-bg); color: var(--text); border: 1px solid var(--border-soft); padding: 6px 8px; border-radius: 3px; font: inherit; font-size: 11px; line-height: 1.5; resize: vertical; }
+  .prompt-label { display: block; font-size: 11px; color: var(--accent); margin: 6px 0 3px; letter-spacing: 0.05em; }
+
+  /* ── 中央：ログ ────────── */
+  #log { flex: 1; overflow-y: auto; padding: 18px 22px;
+    font-family: "Hiragino Mincho ProN", "Yu Mincho", serif; font-size: 14px; line-height: 1.85;
+    background: linear-gradient(135deg, rgba(42,35,48,0.6), rgba(20,20,32,0.6)); }
+  #log .turn { margin: 0 0 0.7em 0; opacity: 0; animation: fadeIn 0.4s forwards; }
+  @keyframes fadeIn { to { opacity: 1; } }
+  #log .turn.aoi { color: var(--text); }
+  #log .turn.aoi .role { color: var(--aoi); font-weight: 500; }
+  #log .turn.sakura { color: var(--text); }
+  #log .turn.sakura .role { color: var(--sakura); font-weight: 500; }
+  #log .turn.narrator { color: var(--narrator); font-style: italic; padding-left: 1em; border-left: 2px solid var(--narrator); }
+  #log .turn.narrator .role { color: var(--narrator); font-weight: 500; }
+  #log .turn.translation { color: var(--tr); padding-left: 1.5em; font-size: 12px; opacity: 0.75; }
+  #log .turn.translation::before { content: "↳ "; }
+  #log .turn.system { color: var(--muted); font-size: 11px; font-family: "SF Mono", monospace;
+    text-align: center; padding: 0.4em; border: 1px dashed var(--border-soft); margin: 1em auto;
+    max-width: 80%; }
+  #log .turn.compress { color: var(--narrator); font-size: 11px; font-style: italic;
+    padding: 0.5em 1em; border-left: 3px solid var(--narrator); background: rgba(168,201,138,0.06); margin: 0.8em 0; }
+  #log .turn.code { font-family: "SF Mono", monospace; font-size: 12px; color: var(--text); background: var(--code-bg); padding: 0.6em 1em; border-radius: 4px; border-left: 3px solid var(--keyword); }
+
+  /* ── 右：Yuiコード ───────── */
+  #yui-out { flex: 1; overflow-y: auto; padding: 12px 18px;
+    font-family: "SF Mono","Menlo",monospace; font-size: 12px; line-height: 1.7;
+    white-space: pre-wrap; background: var(--code-bg); }
+  #yui-out .turn { padding: 6px 0; border-bottom: 1px dashed var(--border-soft); margin-bottom: 6px; }
+  #yui-out .turn-head { color: var(--muted); font-size: 10px; margin-bottom: 4px; }
+  .tok-kw { color: var(--keyword); font-weight: 500; }
+  .tok-str { color: var(--string); }
+  .tok-particle { color: var(--particle); }
+  .tok-comment { color: var(--comment); font-style: italic; }
+  .tok-num { color: var(--num); }
+
+  /* ── 状態バー ────────── */
+  #status-bar { padding: 8px 14px; background: rgba(0,0,0,0.3);
+    border-top: 1px solid var(--border-soft); font-size: 11px; color: var(--text-dim);
+    display: flex; gap: 14px; flex-wrap: wrap; flex-shrink: 0; }
+  #status-bar .st { display: flex; gap: 5px; align-items: center; }
+  #status-bar .st .l { color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; font-size: 10px; }
+  #status-bar .st .v { color: var(--accent); font-family: "SF Mono", monospace; }
+
+  /* ── ローダー ──────── */
+  .loader-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+    display: flex; align-items: center; justify-content: center; z-index: 100; }
+  .loader { background: var(--bg-grad-2); border: 1px solid var(--border); border-radius: 8px;
+    max-width: 540px; width: 90%; padding: 28px 32px; color: var(--text); }
+  .loader h2 { margin: 0 0 12px; color: var(--accent); font-size: 17px; letter-spacing: 0.1em; }
+  .loader p { color: var(--text-dim); font-size: 13px; line-height: 1.85; margin: 0 0 10px; }
+  .loader .progress { margin: 16px 0; height: 5px; background: var(--code-bg); border-radius: 3px; overflow: hidden; }
+  .loader .progress-bar { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s; }
+  .loader .pre-msg { font-size: 11px; color: var(--muted); font-family: "SF Mono", monospace;
+    margin-top: 12px; max-height: 70px; overflow-y: auto; padding: 6px 8px;
+    background: var(--code-bg); border-radius: 3px; }
+  .loader-actions { margin-top: 14px; display: flex; gap: 10px; justify-content: flex-end; }
+
+  footer { padding: 5px 18px; color: var(--muted); font-size: 10px; text-align: right;
+    background: rgba(0,0,0,0.3); border-top: 1px solid var(--border-soft); flex-shrink: 0; }
+
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; grid-template-rows: auto 1fr 1fr; } #param-pane { max-height: 200px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="mark">結</span>AIダイアログ</h1>
+  <div class="modes" id="modes">
+    <button data-mode="duo" class="active">2者対話</button>
+    <button data-mode="trio">3者対話</button>
+    <button data-mode="reverse">逆転</button>
+    <button data-mode="bilingual">言語実験</button>
+    <button data-mode="code">コードで話す</button>
+  </div>
+  <div class="toolbar">
+    <button class="ctrl" id="interventBtn" disabled>⛅ 介入</button>
+    <button class="ctrl" id="resetBtn">リセット</button>
+    <button class="ctrl danger" id="stopBtn" disabled>■ 停止</button>
+    <button class="ctrl primary" id="startBtn" disabled>▶ 開始</button>
+  </div>
+</header>
+<main>
+  <div class="pane" id="param-pane">
+    <div class="pane-head"><span>PARAMETERS</span><span class="ind" id="mode-ind">2者対話</span></div>
+    <div class="param-section">
+      <h3>推論</h3>
+      <div class="param-row"><label>温度</label><input type="range" id="p-temp" min="0" max="20" value="8"><span class="v" id="p-temp-v">0.80</span></div>
+      <div class="param-row"><label>top_p</label><input type="range" id="p-topp" min="0" max="100" value="95"><span class="v" id="p-topp-v">0.95</span></div>
+      <div class="param-row"><label>max_tokens</label><input type="number" id="p-maxtok" min="20" max="400" value="100"></div>
+      <div class="param-row"><label>反復ペナルティ</label><input type="range" id="p-rep" min="100" max="200" value="115"><span class="v" id="p-rep-v">1.15</span></div>
+    </div>
+    <div class="param-section">
+      <h3>進行</h3>
+      <div class="param-row"><label>ターン間隔(ms)</label><input type="number" id="p-delay" min="0" max="5000" value="500"></div>
+      <div class="param-row"><label>履歴サイズ</label><input type="number" id="p-ctx" min="2" max="20" value="6"></div>
+      <div class="param-row"><label>圧縮間隔</label><input type="number" id="p-comp" min="2" max="20" value="3"></div>
+      <div class="param-row"><label>場面遷移ターン</label><input type="number" id="p-scene" min="3" max="50" value="8"></div>
+      <div class="param-row"><label>自動介入頻度</label><input type="range" id="p-autointer" min="0" max="100" value="20"><span class="v" id="p-autointer-v">20%</span></div>
+    </div>
+    <div class="param-section">
+      <h3>システムプロンプト</h3>
+      <span class="prompt-label">葵</span>
+      <textarea class="prompt-edit" id="prompt-aoi"></textarea>
+      <span class="prompt-label">さくら</span>
+      <textarea class="prompt-edit" id="prompt-sakura"></textarea>
+      <span class="prompt-label">ナレーター（3者対話時）</span>
+      <textarea class="prompt-edit" id="prompt-narrator"></textarea>
+    </div>
+  </div>
+
+  <div class="pane" id="log-pane">
+    <div class="pane-head"><span>LOG</span><span class="ind" id="status-indicator">準備中</span></div>
+    <div id="log"><div class="turn system">モデルロード後、モードを選んで「開始」を押してください。</div></div>
+    <div id="status-bar">
+      <div class="st"><span class="l">場面</span><span class="v" id="s-scene">教室の朝</span></div>
+      <div class="st"><span class="l">時刻</span><span class="v" id="s-time">朝</span></div>
+      <div class="st"><span class="l">葵→さくら</span><span class="v" id="s-aoi">30</span></div>
+      <div class="st"><span class="l">さくら→葵</span><span class="v" id="s-sakura">30</span></div>
+      <div class="st"><span class="l">ターン</span><span class="v" id="s-turn">0</span></div>
+      <div class="st"><span class="l">圧縮</span><span class="v" id="s-comp">なし</span></div>
+    </div>
+  </div>
+
+  <div class="pane" id="yui-pane">
+    <div class="pane-head"><span>GENERATED YUI</span><span class="ind" id="yui-ind">行 0</span></div>
+    <div id="yui-out"></div>
+  </div>
+</main>
+<footer>結（Yui）v1.0 ／ WebLLM × Gemma-2-2b-it ／ Multi-Agent ／ © RTCK</footer>
+
+<div id="loader" class="loader-overlay">
+  <div class="loader">
+    <h2>WebLLM 起動 ── モデル選択</h2>
+    <p>使うモデルを選んで「▶ ロード開始」を押してください。完全ローカル動作。</p>
+    <select id="model-select" style="width:100%; background:var(--code-bg); color:var(--text); border:1px solid var(--border); padding:10px 12px; border-radius:4px; font:inherit; font-size:13px; margin:8px 0 14px">
+      <option value="Llama-3.2-3B-Instruct-q4f16_1-MLC" selected>Llama 3.2 3B Instruct（1.9GB・推奨）</option>
+      <option value="Qwen2.5-3B-Instruct-q4f16_1-MLC">Qwen 2.5 3B Instruct（2.0GB・日本語強）</option>
+      <option value="Hermes-3-Llama-3.2-3B-q4f16_1-MLC">Hermes 3 Llama 3.2 3B（1.9GB・キャラ演技）</option>
+      <option value="Phi-3.5-mini-instruct-q4f16_1-MLC">Phi 3.5 Mini（2.4GB）</option>
+      <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B（0.8GB・最軽量）</option>
+      <option value="gemma-2-2b-it-q4f16_1-MLC">Gemma 2 2B Instruct（1.5GB・参考）</option>
+    </select>
+    <div class="progress" id="progress-wrap" style="display:none"><div class="progress-bar" id="progress-bar"></div></div>
+    <div class="pre-msg" id="loader-msg" style="display:none">準備中…</div>
+    <div class="loader-actions">
+      <button class="ctrl" id="loader-skip">スキップ（オフラインデモ）</button>
+      <button class="ctrl primary" id="loader-start">▶ ロード開始</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+"use strict";
+/* ============================================================
+ * 結（Yui）言語 — JavaScript実装（Python版と同等）
+ * ============================================================ */
+
+// ── 文字正規化 ──────────────────────────────────────────────
+const ZEN2HAN = {
+  "０":"0","１":"1","２":"2","３":"3","４":"4",
+  "５":"5","６":"6","７":"7","８":"8","９":"9",
+  "＋":"+","－":"-","×":"*","÷":"/","％":"%",
+  "＝":"=","＜":"<","＞":">",
+  "（":"(","）":")","［":"[","］":"]","｛":"{","｝":"}",
+  "：":":","　":" ",
+};
+const KAN_DIGIT = {"零":0,"〇":0,"一":1,"二":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9};
+const KAN_UNIT  = {"十":10,"百":100,"千":1000,"万":10000,"億":100000000};
+
+function normChar(c) { return ZEN2HAN[c] || c; }
+
+function kan2int(s) {
+  if (!s) return null;
+  for (const c of s) if (!(c in KAN_DIGIT) && !(c in KAN_UNIT)) return null;
+  let total = 0, section = 0, current = 0;
+  for (const c of s) {
+    if (c in KAN_DIGIT) {
+      current = KAN_DIGIT[c];
+    } else {
+      const unit = KAN_UNIT[c];
+      if (unit >= 10000) {
+        let base = section + current;
+        if (base === 0) base = 1;
+        section = base * unit;
+        total += section;
+        section = 0;
+      } else {
+        section += (current || 1) * unit;
+      }
+      current = 0;
+    }
+  }
+  return total + section + current;
+}
+
+// ── 字句解析 ────────────────────────────────────────────────
+const PARTICLES = ["から","まで","より","について","を","に","で","へ","と","は","が","の"];
+const KEYWORDS  = [
+  "もし","ならば","そうでなければ","おわり",
+  "繰り返す","のあいだ","各",
+  "関数","戻り値","戻る",
+  "真","偽","無",
+  "かつ","または","でない",
+  "とする","である","せよ","だろうか",
+  "以上","以下","未満",
+  "等しい","等しくない","大きい","小さい",
+  "やめる","次へ",
+  "種族","属性","新しい",
+  "試す","ならば失敗",
+];
+const KW_OR_PARTICLE_SORTED = [...new Set([...KEYWORDS, ...PARTICLES])].sort((a,b)=>b.length-a.length);
+
+const RE_IDENT_START = /[ぁ-んァ-ヶー一-龥a-zA-Z_々〆ヵヶ]/;
+const RE_IDENT_CHAR  = /[ぁ-んァ-ヶー一-龥a-zA-Z_0-9々〆ヵヶ]/;
+
+function matchKwOrParticle(src, i) {
+  for (const w of KW_OR_PARTICLE_SORTED) {
+    if (src.startsWith(w, i)) return w;
+  }
+  return null;
+}
+
+class LexError extends Error {}
+class ParseError extends Error {}
+class RuntimeYuiError extends Error {}
+
+function tokenize(src) {
+  const tokens = [];
+  let i = 0, line = 1;
+  const n = src.length;
+  const emit = (kind, value) => tokens.push({kind, value, line});
+
+  while (i < n) {
+    const c = src[i];
+
+    if (c === "\n") {
+      if (tokens.length && tokens[tokens.length-1].kind !== "NEWLINE") emit("NEWLINE","\n");
+      line++; i++; continue;
+    }
+    if (" \t\r　、，".includes(c)) { i++; continue; }
+
+    if (c === "※") {
+      while (i < n && src[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "〔") {
+      let depth = 1; i++;
+      while (i < n && depth > 0) {
+        if (src[i]==="〔") depth++;
+        else if (src[i]==="〕") depth--;
+        else if (src[i]==="\n") line++;
+        i++;
+      }
+      continue;
+    }
+
+    if (c === "「" || c === "『") {
+      const close = c === "「" ? "」" : "』";
+      const isRaw = c === "「";
+      i++;
+      let buf = "";
+      while (i < n && src[i] !== close) {
+        if (!isRaw && src[i] === "\\" && i+1 < n) {
+          const nx = src[i+1];
+          buf += {"n":"\n","t":"\t","r":"\r","\\":"\\","「":"「","」":"」","『":"『","』":"』","{":"","}":""}[nx] || nx;
+          i += 2;
+        } else {
+          if (src[i] === "\n") line++;
+          buf += src[i]; i++;
+        }
+      }
+      if (i >= n) throw new LexError(`${line}行目：文字列リテラルが閉じていません`);
+      i++;
+      emit(isRaw ? "STR_RAW" : "STR_COOKED", buf);
+      continue;
+    }
+
+    const nc = normChar(c);
+    if (/[0-9]/.test(nc)) {
+      let j = i, buf = "";
+      while (j < n) {
+        const cn = normChar(src[j]);
+        if (cn === "_") { j++; continue; }       // 桁区切り
+        if (/[0-9]/.test(cn) || cn === ".") { buf += cn; j++; }
+        else break;
+      }
+      const val = buf.includes(".") ? parseFloat(buf) : parseInt(buf, 10);
+      emit("NUM", val);
+      i = j; continue;
+    }
+
+    if (c in KAN_DIGIT || c in KAN_UNIT) {
+      let j = i;
+      while (j < n && (src[j] in KAN_DIGIT || src[j] in KAN_UNIT)) j++;
+      const ok = (j === n) || !RE_IDENT_CHAR.test(src[j]) || matchKwOrParticle(src, j);
+      if (ok) {
+        const v = kan2int(src.slice(i, j));
+        if (v !== null) {
+          emit("NUM", v); i = j; continue;
+        }
+      }
+    }
+
+    // 多文字記号
+    let matchedSym = null;
+    for (const sym of ["==","!=","<=",">=","≠","≦","≧"]) {
+      if (src.startsWith(sym, i)) {
+        matchedSym = ({"≠":"!=","≦":"<=","≧":">="})[sym] || sym;
+        i += sym.length; break;
+      }
+    }
+    if (matchedSym) { emit("SYM", matchedSym); continue; }
+
+    if (c === "→") { emit("SYM", "→"); i++; continue; }
+
+    if ("+-*/%=()[]{}:,.<>".includes(nc)) {
+      emit("SYM", nc); i++; continue;
+    }
+
+    const kp = matchKwOrParticle(src, i);
+    if (kp) {
+      emit(kp.length >= 0 && KEYWORDS.includes(kp) ? "KW" : "PARTICLE", kp);
+      i += kp.length; continue;
+    }
+
+    if (RE_IDENT_START.test(c)) {
+      let j = i + 1;
+      while (j < n) {
+        if (!RE_IDENT_CHAR.test(src[j])) break;
+        if (matchKwOrParticle(src, j)) break;
+        j++;
+      }
+      emit("IDENT", src.slice(i, j));
+      i = j; continue;
+    }
+
+    throw new LexError(`${line}行目：解釈できない文字「${c}」(U+${c.codePointAt(0).toString(16).toUpperCase()})`);
+  }
+  if (tokens.length && tokens[tokens.length-1].kind !== "NEWLINE") emit("NEWLINE","\n");
+  emit("EOF", null);
+  return tokens;
+}
+
+// ── AST ─────────────────────────────────────────────────────
+const N = {
+  Num:   (v)             => ({type:"Num", value:v}),
+  Str:   (v,cooked)      => ({type:"Str", value:v, isCooked: !!cooked}),
+  Bool:  (v)             => ({type:"Bool", value:v}),
+  None:  ()              => ({type:"None"}),
+  Ident: (n)             => ({type:"Ident", name:n}),
+  List:  (items)         => ({type:"List", items}),
+  Dict:  (pairs)         => ({type:"Dict", pairs}),
+  Bin:   (op,l,r)        => ({type:"Bin", op, left:l, right:r}),
+  Un:    (op,o)          => ({type:"Un", op, operand:o}),
+  Call:  (verb,args,cmd) => ({type:"Call", verb, args, isCmd: cmd||false}),
+  Assign:(name,val,c)    => ({type:"Assign", name, value:val, isConst:c}),
+  If:    (c,t,e)         => ({type:"If", cond:c, then:t, else:e}),
+  While: (c,b)           => ({type:"While", cond:c, body:b}),
+  ForR:  (v,s,e,b)       => ({type:"ForR", var:v, start:s, end:e, body:b}),
+  ForE:  (v,it,b)        => ({type:"ForE", var:v, iter:it, body:b}),
+  Func:  (verb,p,b)      => ({type:"Func", verb, params:p, body:b}),
+  Ret:   (v)             => ({type:"Ret", value:v}),
+  Topic: (t,b)           => ({type:"Topic", topic:t, body:b}),
+  Expr:  (e)             => ({type:"Expr", expr:e}),
+  Prog:  (b)             => ({type:"Prog", body:b}),
+  Brk:   ()              => ({type:"Brk"}),
+  Cont:  ()              => ({type:"Cont"}),
+  RaceDef:(name,attrs)   => ({type:"RaceDef", name, attrs}),
+  New:   (race,fields)   => ({type:"New", race, fields}),
+  Try:   (tb, cb)        => ({type:"Try", tryBody:tb, catchBody:cb}),
+  Lambda:(params, body)  => ({type:"Lambda", params, body}),
+};
+
+// ── Parser ──────────────────────────────────────────────────
+class Parser {
+  constructor(tokens) { this.tokens = tokens; this.pos = 0; }
+  peek(o=0) { return this.tokens[this.pos+o]; }
+  advance() { return this.tokens[this.pos++]; }
+  check(kind, value) {
+    const t = this.peek();
+    if (t.kind !== kind) return false;
+    if (value !== undefined && t.value !== value) return false;
+    return true;
+  }
+  match(kind, value) { return this.check(kind, value) ? this.advance() : null; }
+  expect(kind, value) {
+    const t = this.peek();
+    if (!this.check(kind, value)) throw new ParseError(`${t.line}行目：期待 ${kind}(${value}) 実際 ${t.kind}(${JSON.stringify(t.value)})`);
+    return this.advance();
+  }
+  skipNewlines() { while (this.check("NEWLINE")) this.advance(); }
+
+  parseProgram() {
+    const body = [];
+    this.skipNewlines();
+    while (!this.check("EOF")) {
+      const s = this.parseStatement();
+      if (s) body.push(s);
+      this.skipNewlines();
+    }
+    return N.Prog(body);
+  }
+
+  parseStatement() {
+    if (this.check("KW","もし")) return this.parseIf();
+    if (this.check("KW","各")) return this.parseFor();
+    if (this.check("KW","関数") && this.peek(1).kind === "SYM" && this.peek(1).value === ":") return this.parseFuncDef();
+    if (this.check("KW","戻り値")) return this.parseReturnValue();
+    if (this.check("KW","戻る")) { this.advance(); return N.Ret(null); }
+    if (this.check("KW","やめる")) { this.advance(); return N.Brk(); }
+    if (this.check("KW","次へ"))   { this.advance(); return N.Cont(); }
+    if (this.check("KW","種族"))   return this.parseRaceDef();
+    if (this.check("KW","試す"))   return this.parseTry();
+    const line = this.collectLine();
+    return this.parseLine(line);
+  }
+
+  collectLine() {
+    const toks = [];
+    let depth = 0;
+    while (!this.check("EOF")) {
+      const t = this.peek();
+      if (t.kind === "NEWLINE" && depth === 0) { this.advance(); break; }
+      if (t.kind === "SYM" && "([{".includes(t.value)) depth++;
+      else if (t.kind === "SYM" && ")]}".includes(t.value)) depth--;
+      toks.push(this.advance());
+    }
+    return toks;
+  }
+
+  parseLine(toks) {
+    if (!toks.length) return null;
+
+    if (toks.length >= 2 && toks[toks.length-1].value === "繰り返す" && toks[toks.length-2].value === "のあいだ") {
+      const cond = this.parseExprFrom(toks.slice(0, -2));
+      const body = this.parseBlockUntil(["おわり"]);
+      return N.While(cond, body);
+    }
+
+    const last = toks[toks.length-1];
+    if (last.kind === "PARTICLE" && last.value === "について") {
+      const topic = this.parseExprFrom(toks.slice(0, -1));
+      const body = this.parseBlockUntil(["おわり"]);
+      return N.Topic(topic, body);
+    }
+    if (last.kind === "KW" && last.value === "とする") return this.parseAssign(toks.slice(0,-1), false);
+    if (last.kind === "KW" && last.value === "である") return this.parseAssign(toks.slice(0,-1), true);
+    if (last.kind === "KW" && last.value === "せよ") {
+      const expr = this.parseCallFrom(toks.slice(0,-1), true);
+      return N.Expr(expr);
+    }
+    if (last.kind === "KW" && last.value === "だろうか") {
+      return N.Expr(this.parseExprFrom(toks.slice(0,-1)));
+    }
+    return N.Expr(this.parseExprFrom(toks));
+  }
+
+  parseAssign(toks, isConst) {
+    if (!toks.length || toks[0].kind !== "IDENT") throw new ParseError("代入文の左辺は識別子");
+    const name = toks[0].value;
+    if (toks.length < 3 || toks[1].kind !== "PARTICLE" || !["を","は"].includes(toks[1].value))
+      throw new ParseError(`${toks[0].line}行目：代入は「<名前>を/は <式>」の形`);
+    const rhs = this.parseExprFrom(toks.slice(2));
+    return N.Assign(name, rhs, isConst);
+  }
+
+  parseIf() {
+    this.expect("KW","もし");
+    const condToks = [];
+    while (!this.check("KW","ならば")) {
+      if (this.check("EOF") || this.check("NEWLINE")) throw new ParseError("もし文に「ならば」がありません");
+      condToks.push(this.advance());
+    }
+    this.expect("KW","ならば");
+    this.skipNewlines();
+    const then = [];
+    while (!this.check("KW","そうでなければ") && !this.check("KW","おわり")) {
+      if (this.check("EOF")) throw new ParseError("もし文に「おわり」がありません");
+      const s = this.parseStatement();
+      if (s) then.push(s);
+      this.skipNewlines();
+    }
+    let elseBody = [];
+    if (this.match("KW","そうでなければ")) {
+      if (this.check("KW","もし")) {
+        elseBody = [this.parseIf()];
+        return N.If(this.parseExprFrom(condToks), then, elseBody);
+      }
+      this.skipNewlines();
+      while (!this.check("KW","おわり")) {
+        if (this.check("EOF")) throw new ParseError("もし文に「おわり」がありません");
+        const s = this.parseStatement();
+        if (s) elseBody.push(s);
+        this.skipNewlines();
+      }
+    }
+    this.expect("KW","おわり");
+    return N.If(this.parseExprFrom(condToks), then, elseBody);
+  }
+
+  parseFor() {
+    this.expect("KW","各");
+    const varTok = this.expect("IDENT");
+    this.expect("PARTICLE","を");
+    const bodyToks = [];
+    while (!this.check("KW","繰り返す")) {
+      if (this.check("EOF") || this.check("NEWLINE")) throw new ParseError("各文に「繰り返す」がありません");
+      bodyToks.push(this.advance());
+    }
+    this.expect("KW","繰り返す");
+    if (bodyToks.length && bodyToks[bodyToks.length-1].kind === "PARTICLE" && bodyToks[bodyToks.length-1].value === "について") {
+      const it = this.parseExprFrom(bodyToks.slice(0,-1));
+      const block = this.parseBlockUntil(["おわり"]);
+      return N.ForE(varTok.value, it, block);
+    }
+    let kara = -1, made = -1;
+    bodyToks.forEach((t,i) => {
+      if (t.kind === "PARTICLE" && t.value === "から") kara = i;
+      if (t.kind === "PARTICLE" && t.value === "まで") made = i;
+    });
+    if (kara === -1 || made === -1 || made <= kara) throw new ParseError("各文は「<開始>から<終了>まで」または「<配列>について」");
+    const start = this.parseExprFrom(bodyToks.slice(0, kara));
+    const end   = this.parseExprFrom(bodyToks.slice(kara+1, made));
+    const block = this.parseBlockUntil(["おわり"]);
+    return N.ForR(varTok.value, start, end, block);
+  }
+
+  parseFuncDef() {
+    this.expect("KW","関数");
+    this.expect("SYM",":");
+    const sig = [];
+    while (!this.check("NEWLINE") && !this.check("EOF")) sig.push(this.advance());
+    this.expect("NEWLINE");
+    const params = [];
+    const verbParts = [];
+    let i = 0;
+    while (i < sig.length) {
+      const t = sig[i];
+      if (t.kind === "SYM" && t.value === "[") {
+        if (i+2 >= sig.length) throw new ParseError("関数シグネチャ：[]助詞が壊れています");
+        const nameTok = sig[i+1];
+        if (sig[i+2].kind !== "SYM" || sig[i+2].value !== "]") throw new ParseError("関数シグネチャ：]がありません");
+        const pTok = sig[i+3];
+        if (!pTok || pTok.kind !== "PARTICLE") throw new ParseError("関数シグネチャ：仮引数の後に助詞が必要");
+        params.push([nameTok.value, pTok.value]);
+        i += 4;
+      } else {
+        if (t.kind === "IDENT" || t.kind === "KW") verbParts.push(t.value);
+        i++;
+      }
+    }
+    const verb = verbParts.join("");
+    const body = this.parseBlockUntil(["おわり"]);
+    return N.Func(verb, params, body);
+  }
+
+  parseReturnValue() {
+    this.expect("KW","戻り値");
+    this.expect("SYM",":");
+    const toks = this.collectLine();
+    return N.Ret(this.parseExprFrom(toks));
+  }
+
+  parseTry() {
+    this.expect("KW","試す");
+    this.skipNewlines();
+    const tryBody = [];
+    while (!this.check("KW","ならば失敗")) {
+      if (this.check("EOF")) throw new ParseError("試す文に「ならば失敗」がありません");
+      const s = this.parseStatement();
+      if (s) tryBody.push(s);
+      this.skipNewlines();
+    }
+    this.expect("KW","ならば失敗");
+    this.skipNewlines();
+    const catchBody = [];
+    while (!this.check("KW","おわり")) {
+      if (this.check("EOF")) throw new ParseError("試す文に「おわり」がありません");
+      const s = this.parseStatement();
+      if (s) catchBody.push(s);
+      this.skipNewlines();
+    }
+    this.advance();
+    return N.Try(tryBody, catchBody);
+  }
+
+  parseLambda() {
+    this.expect("KW","関数");
+    this.expect("SYM","(");
+    const params = [];
+    while (!this.check("SYM",")")) {
+      this.expect("SYM","[");
+      const name = this.expect("IDENT").value;
+      this.expect("SYM","]");
+      const pt = this.peek();
+      if (pt.kind !== "PARTICLE") throw new ParseError(`${pt.line}行目：ラムダ仮引数の後に助詞が必要`);
+      this.advance();
+      params.push([name, pt.value]);
+    }
+    this.expect("SYM",")");
+    const body = this.parseExpr();
+    return N.Lambda(params, body);
+  }
+
+  parseRaceDef() {
+    this.expect("KW","種族");
+    const name = this.expect("IDENT").value;
+    this.expect("SYM",":");
+    this.skipNewlines();
+    const attrs = [];
+    while (!this.check("KW","おわり")) {
+      if (this.check("EOF")) throw new ParseError("種族定義に「おわり」がありません");
+      if (this.check("KW","属性")) {
+        this.advance();
+        this.expect("SYM",":");
+        attrs.push(this.expect("IDENT").value);
+        while (this.match("SYM",",")) attrs.push(this.expect("IDENT").value);
+        this.skipNewlines();
+      } else {
+        throw new ParseError(`${this.peek().line}行目：種族定義中に「属性：」が必要`);
+      }
+    }
+    this.advance();
+    return N.RaceDef(name, attrs);
+  }
+  parseNewInstance() {
+    this.expect("KW","新しい");
+    const race = this.expect("IDENT").value;
+    this.expect("SYM","(");
+    this.skipNewlines();
+    const fields = {};
+    if (!this.check("SYM",")")) {
+      while (true) {
+        this.skipNewlines();
+        const k = this.expect("IDENT").value;
+        this.expect("SYM","→");
+        fields[k] = this.parseExpr();
+        this.skipNewlines();
+        if (!this.match("SYM",",")) break;
+        this.skipNewlines();
+      }
+    }
+    this.skipNewlines();
+    this.expect("SYM",")");
+    return N.New(race, fields);
+  }
+
+  parseBlockUntil(terminators) {
+    const body = [];
+    this.skipNewlines();
+    while (!terminators.some(t => this.check("KW", t))) {
+      if (this.check("EOF")) throw new ParseError(`ブロックの終端 ${terminators} が見つかりません`);
+      const s = this.parseStatement();
+      if (s) body.push(s);
+      this.skipNewlines();
+    }
+    this.advance();
+    return body;
+  }
+
+  parseExprFrom(toks) {
+    const sub = new Parser([...toks, {kind:"NEWLINE",value:"\n",line:0}, {kind:"EOF",value:null,line:0}]);
+    return sub.parseCallOrExpr();
+  }
+
+  parseCallFrom(toks, isCmd) {
+    const sub = new Parser([...toks, {kind:"NEWLINE",value:"\n",line:0}, {kind:"EOF",value:null,line:0}]);
+    const node = sub.parseCallOrExpr();
+    if (node.type === "Call") node.isCmd = isCmd;
+    return node;
+  }
+
+  parseCallOrExpr() {
+    const saved = this.pos;
+    const pieces = this.scanPieces();
+    if (!pieces) {
+      this.pos = saved;
+      return this.parseExpr();
+    }
+    const [seg, particles, tail] = pieces;
+    const args = {};
+    seg.forEach((s, idx) => {
+      args[particles[idx]] = this.parseExprFrom(s);
+    });
+    const verb = tail.map(t=>t.value).join("");
+    return N.Call(verb, args, false);
+  }
+
+  scanPieces() {
+    let seg = [[]];
+    const particles = [];
+    let depth = 0;
+    const toks = [];
+    while (!this.check("NEWLINE") && !this.check("EOF")) toks.push(this.advance());
+    for (const t of toks) {
+      if (t.kind === "SYM" && "([{".includes(t.value)) { depth++; seg[seg.length-1].push(t); continue; }
+      if (t.kind === "SYM" && ")]}".includes(t.value)) { depth--; seg[seg.length-1].push(t); continue; }
+      // 「の」「は」は scan_pieces では区切らない（前者はpostfix、後者は代入と衝突）
+      if (depth === 0 && t.kind === "PARTICLE" && ["を","に","で","へ","と","から","まで","より","が"].includes(t.value)) {
+        particles.push(t.value);
+        seg.push([]);
+        continue;
+      }
+      seg[seg.length-1].push(t);
+    }
+    if (!particles.length) return null;
+    const tail = seg[seg.length-1];
+    seg = seg.slice(0, -1);
+    if (seg.length !== particles.length) return null;
+    if (!tail.length || tail.some(t => t.kind !== "IDENT" && t.kind !== "KW")) return null;
+    // 末尾が比較語なら呼び出しではなく式扱い
+    if (tail.length === 1 && tail[0].kind === "KW" &&
+        ["大きい","小さい","以上","以下","未満","等しい","等しくない"].includes(tail[0].value)) return null;
+    return [seg, particles, tail];
+  }
+
+  parseExpr() { return this.parseOr(); }
+  parseOr() {
+    let l = this.parseAnd();
+    while (this.check("KW","または")) { this.advance(); l = N.Bin("or", l, this.parseAnd()); }
+    return l;
+  }
+  parseAnd() {
+    let l = this.parseNot();
+    while (this.check("KW","かつ")) { this.advance(); l = N.Bin("and", l, this.parseNot()); }
+    return l;
+  }
+  parseNot() {
+    if (this.match("KW","でない")) return N.Un("not", this.parseNot());
+    return this.parseCompare();
+  }
+  parseCompare() {
+    const left = this.parseAdd();
+
+    // 「が」マーカー：比較式として試行、失敗したら巻き戻して呼び出しに譲る
+    if (this.peek().kind === "PARTICLE" && this.peek().value === "が") {
+      const save = this.pos;
+      try {
+        this.advance();
+        const right = this.parseAdd();
+        if (this.match("PARTICLE","より")) {
+          if (this.match("KW","大きい")) return N.Bin(">",  left, right);
+          if (this.match("KW","小さい")) return N.Bin("<",  left, right);
+          if (this.match("KW","以上"))   return N.Bin(">=", left, right);
+          if (this.match("KW","以下"))   return N.Bin("<=", left, right);
+          if (this.match("KW","未満"))   return N.Bin("<",  left, right);
+          throw new ParseError("「より」の後に比較語が必要");
+        }
+        if (this.match("PARTICLE","と")) {
+          if (this.match("KW","等しい"))     return N.Bin("==", left, right);
+          if (this.match("KW","等しくない")) return N.Bin("!=", left, right);
+          throw new ParseError("「と」の後に比較語が必要");
+        }
+        if (this.match("KW","以上")) return N.Bin(">=", left, right);
+        if (this.match("KW","以下")) return N.Bin("<=", left, right);
+        if (this.match("KW","未満")) return N.Bin("<",  left, right);
+        const t2 = this.peek();
+        if (t2.kind === "SYM" && ["==","!=","<",">","<=",">="].includes(t2.value)) {
+          const op = this.advance().value;
+          return N.Bin(op, right, this.parseAdd());
+        }
+        throw new ParseError("「が」の後に比較形式が必要");
+      } catch (e) {
+        if (e instanceof ParseError) { this.pos = save; }
+        else throw e;
+      }
+    }
+
+    const t = this.peek();
+    if (t.kind === "SYM" && ["==","!=","<",">","<=",">="].includes(t.value)) {
+      const op = this.advance().value;
+      return N.Bin(op, left, this.parseAdd());
+    }
+    if (t.kind === "PARTICLE" && t.value === "より") {
+      const save = this.pos;
+      this.advance();
+      const right = this.parseAdd();
+      if (this.match("KW","大きい")) return N.Bin(">",  left, right);
+      if (this.match("KW","小さい")) return N.Bin("<",  left, right);
+      if (this.match("KW","以上"))   return N.Bin(">=", left, right);
+      if (this.match("KW","以下"))   return N.Bin("<=", left, right);
+      if (this.match("KW","未満"))   return N.Bin("<",  left, right);
+      this.pos = save;
+    }
+    if (t.kind === "PARTICLE" && t.value === "と") {
+      const save = this.pos;
+      this.advance();
+      const right = this.parseAdd();
+      if (this.match("KW","等しい"))     return N.Bin("==", left, right);
+      if (this.match("KW","等しくない")) return N.Bin("!=", left, right);
+      this.pos = save;
+    }
+    return left;
+  }
+  parseAdd() {
+    let l = this.parseMul();
+    while (this.peek().kind === "SYM" && ["+","-"].includes(this.peek().value)) {
+      const op = this.advance().value;
+      l = N.Bin(op, l, this.parseMul());
+    }
+    return l;
+  }
+  parseMul() {
+    let l = this.parseUnary();
+    while (this.peek().kind === "SYM" && ["*","/","%"].includes(this.peek().value)) {
+      const op = this.advance().value;
+      l = N.Bin(op, l, this.parseUnary());
+    }
+    return l;
+  }
+  parseUnary() {
+    if (this.peek().kind === "SYM" && this.peek().value === "-") {
+      this.advance();
+      return N.Un("neg", this.parseUnary());
+    }
+    return this.parsePostfix();
+  }
+  parsePostfix() {
+    let node = this.parseAtom();
+    while (true) {
+      if (this.peek().kind === "PARTICLE" && this.peek().value === "の" && this.peek(1).kind === "IDENT") {
+        this.advance();
+        const v = this.advance();
+        node = N.Call(v.value, {"の": node}, false);
+        continue;
+      }
+      if (this.peek().kind === "KW" && this.peek().value === "でない") {
+        this.advance();
+        node = N.Un("not", node);
+        continue;
+      }
+      if (this.peek().kind === "SYM" && this.peek().value === "[") {
+        this.advance();
+        const idx = this.parseExpr();
+        this.expect("SYM","]");
+        node = N.Call("番目取り出す", {"から": node, "を": idx}, false);
+        continue;
+      }
+      break;
+    }
+    return node;
+  }
+  parseAtom() {
+    const t = this.peek();
+    if (t.kind === "NUM") { this.advance(); return N.Num(t.value); }
+    if (t.kind === "STR_RAW")    { this.advance(); return N.Str(t.value, false); }
+    if (t.kind === "STR_COOKED") { this.advance(); return N.Str(t.value, true); }
+    if (t.kind === "KW" && t.value === "真") { this.advance(); return N.Bool(true); }
+    if (t.kind === "KW" && t.value === "偽") { this.advance(); return N.Bool(false); }
+    if (t.kind === "KW" && t.value === "無") { this.advance(); return N.None(); }
+    if (t.kind === "KW" && t.value === "新しい") return this.parseNewInstance();
+    if (t.kind === "KW" && t.value === "関数")   return this.parseLambda();
+    if (t.kind === "SYM" && t.value === "(") {
+      this.advance();
+      this.skipNewlines();
+      const inner = [];
+      let depth = 1;
+      while (depth > 0) {
+        const tt = this.peek();
+        if (tt.kind === "EOF") throw new ParseError("カッコが閉じていません");
+        if (tt.kind === "SYM" && tt.value === "(") depth++;
+        else if (tt.kind === "SYM" && tt.value === ")") { depth--; if (depth === 0) { this.advance(); break; } }
+        inner.push(this.advance());
+      }
+      return this.parseCallFrom(inner, false);
+    }
+    if (t.kind === "SYM" && t.value === "[") {
+      this.advance();
+      const items = [];
+      this.skipNewlines();
+      if (!this.check("SYM","]")) {
+        items.push(this.parseExpr());
+        this.skipNewlines();
+        while (this.match("SYM",",")) {
+          this.skipNewlines();
+          items.push(this.parseExpr());
+          this.skipNewlines();
+        }
+      }
+      this.skipNewlines();
+      this.expect("SYM","]");
+      return N.List(items);
+    }
+    if (t.kind === "SYM" && t.value === "{") {
+      this.advance();
+      const pairs = [];
+      this.skipNewlines();
+      if (!this.check("SYM","}")) {
+        while (true) {
+          this.skipNewlines();
+          const k = this.parseExpr();
+          this.expect("SYM","→");
+          const v = this.parseExpr();
+          pairs.push([k, v]);
+          this.skipNewlines();
+          if (!this.match("SYM",",")) break;
+          this.skipNewlines();
+        }
+      }
+      this.skipNewlines();
+      this.expect("SYM","}");
+      return N.Dict(pairs);
+    }
+    if (t.kind === "IDENT") { this.advance(); return N.Ident(t.value); }
+    throw new ParseError(`${t.line}行目：式の解釈に失敗（${t.kind}:${JSON.stringify(t.value)}）`);
+  }
+}
+
+// ── Environment & Function ─────────────────────────────────
+class Environment {
+  constructor(parent=null) {
+    this.vars = new Map();
+    this.consts = new Set();
+    this.parent = parent;
+    this.topic = null;
+  }
+  has(name) { return this.vars.has(name) || (this.parent && this.parent.has(name)); }
+  get(name) {
+    if (this.vars.has(name)) return this.vars.get(name);
+    if (this.parent) return this.parent.get(name);
+    throw new RuntimeYuiError(`未定義の名前：${name}`);
+  }
+  set(name, value, isConst=false) {
+    if (isConst) {
+      if (this.has(name)) throw new RuntimeYuiError(`「${name}」は既に定義されています`);
+      this.vars.set(name, value);
+      this.consts.add(name);
+      return;
+    }
+    let env = this;
+    while (env) {
+      if (env.vars.has(name)) {
+        if (env.consts.has(name)) throw new RuntimeYuiError(`「${name}」は不変宣言（〜である）のため再代入できません`);
+        env.vars.set(name, value);
+        return;
+      }
+      env = env.parent;
+    }
+    this.vars.set(name, value);
+  }
+  getTopic() {
+    let e = this;
+    while (e) { if (e.topic !== null) return e.topic; e = e.parent; }
+    return null;
+  }
+}
+
+class YuiFunction {
+  constructor(name, params, body, env) {
+    this.name = name; this.params = params; this.body = body; this.env = env;
+  }
+  call(args) {
+    const local = new Environment(this.env);
+    for (const [pname, particle] of this.params) {
+      if (!(particle in args)) throw new RuntimeYuiError(`関数「${this.name}」の引数「${pname}（${particle}）」が不足`);
+      local.set(pname, args[particle]);
+    }
+    try {
+      for (const stmt of this.body) Evaluator.eval(stmt, local);
+    } catch (e) {
+      if (e instanceof ReturnSignal) return e.value;
+      throw e;
+    }
+    return null;
+  }
+}
+class ReturnSignal { constructor(v) { this.value = v; } }
+class BreakSignal {}
+class ContinueSignal {}
+class Race {
+  constructor(name, attrs) { this.name = name; this.attrs = attrs; }
+}
+
+function interpolate(text, env) {
+  let out = "", i = 0, n = text.length;
+  while (i < n) {
+    const c = text[i];
+    if (c === "{") {
+      const j = text.indexOf("}", i);
+      if (j === -1) throw new RuntimeYuiError("文字列補間：}が閉じていません");
+      const exprSrc = text.slice(i+1, j);
+      try {
+        const tokens = tokenize(exprSrc);
+        const tree = new Parser(tokens).parseCallOrExpr();
+        out += yuiToStr(Evaluator.eval(tree, env));
+      } catch (e) {
+        throw new RuntimeYuiError(`補間式「${exprSrc}」の解析失敗：${e.message}`);
+      }
+      i = j + 1;
+    } else if (c === "") { out += "{"; i++; }
+    else if (c === "") { out += "}"; i++; }
+    else { out += c; i++; }
+  }
+  return out;
+}
+
+function yuiToStr(v) {
+  if (v === null || v === undefined) return "無";
+  if (typeof v === "boolean") return v ? "真" : "偽";
+  if (Array.isArray(v)) return "［" + v.map(yuiToStr).join(", ") + "］";
+  return String(v);
+}
+
+// ── Evaluator ──────────────────────────────────────────────
+const Evaluator = {
+  eval(node, env) {
+    switch (node.type) {
+      case "Prog": {
+        for (const s of node.body) Evaluator.eval(s, env);
+        return null;
+      }
+      case "Num": return node.value;
+      case "Str":
+        if (node.isCooked && (node.value.includes("{") || node.value.includes(""))) {
+          return interpolate(node.value, env);
+        }
+        return node.value.replace(//g,"{").replace(//g,"}");
+      case "Bool": return node.value;
+      case "None": return null;
+      case "List": return node.items.map(x => Evaluator.eval(x, env));
+      case "Dict": {
+        const d = {};
+        for (const [k, v] of node.pairs) d[Evaluator.eval(k, env)] = Evaluator.eval(v, env);
+        return d;
+      }
+      case "Brk":  throw new BreakSignal();
+      case "Cont": throw new ContinueSignal();
+      case "RaceDef": {
+        env.set(node.name, new Race(node.name, node.attrs));
+        return null;
+      }
+      case "New": {
+        const race = env.get(node.race);
+        if (!(race instanceof Race)) throw new RuntimeYuiError(`「${node.race}」は種族ではありません`);
+        const inst = {};
+        const evald = {};
+        for (const k of Object.keys(node.fields)) evald[k] = Evaluator.eval(node.fields[k], env);
+        for (const a of race.attrs) inst[a] = (a in evald) ? evald[a] : null;
+        for (const k of Object.keys(evald)) if (!(k in inst)) inst[k] = evald[k];
+        inst["__種族__"] = race.name;
+        return inst;
+      }
+      case "Try": {
+        try {
+          for (const s of node.tryBody) Evaluator.eval(s, env);
+        } catch (e) {
+          if (e instanceof RuntimeYuiError) {
+            const catchEnv = new Environment(env);
+            catchEnv.set("失敗値", e.message);
+            for (const s of node.catchBody) Evaluator.eval(s, catchEnv);
+          } else { throw e; }
+        }
+        return null;
+      }
+      case "Lambda": {
+        return new YuiFunction("<無名>", node.params, [N.Ret(node.body)], env);
+      }
+      case "Ident": {
+        if (node.name === "主題") {
+          const t = env.getTopic();
+          if (t === null) throw new RuntimeYuiError("「主題」は〜について ブロックの内側でのみ使えます");
+          return t;
+        }
+        if (env.has(node.name)) return env.get(node.name);
+        if (node.name in BUILTINS) {
+          const args = {};
+          const topic = env.getTopic();
+          if (topic !== null) args["を"] = topic;
+          return BUILTINS[node.name](args, env);
+        }
+        throw new RuntimeYuiError(`未定義の名前：${node.name}`);
+      }
+      case "Bin": {
+        const l = Evaluator.eval(node.left, env);
+        const r = Evaluator.eval(node.right, env);
+        switch (node.op) {
+          case "+":  return (typeof l === "string" || typeof r === "string") ? String(l)+String(r) : l + r;
+          case "-":  return l - r;
+          case "*":  return l * r;
+          case "/":  return (Number.isInteger(l) && Number.isInteger(r) && r !== 0 && l % r === 0) ? l / r : l / r;
+          case "%":  return l % r;
+          case "==": return l === r;
+          case "!=": return l !== r;
+          case "<":  return l < r;
+          case ">":  return l > r;
+          case "<=": return l <= r;
+          case ">=": return l >= r;
+          case "and": return Boolean(l) && Boolean(r);
+          case "or":  return Boolean(l) || Boolean(r);
+        }
+        throw new RuntimeYuiError(`未対応の演算子：${node.op}`);
+      }
+      case "Un": {
+        const v = Evaluator.eval(node.operand, env);
+        if (node.op === "neg") return -v;
+        if (node.op === "not") return !v;
+        throw new RuntimeYuiError(`未対応の単項演算子：${node.op}`);
+      }
+      case "Assign": {
+        const v = Evaluator.eval(node.value, env);
+        env.set(node.name, v, node.isConst);
+        return null;
+      }
+      case "If": {
+        const c = Evaluator.eval(node.cond, env);
+        const body = c ? node.then : node.else;
+        for (const s of body) Evaluator.eval(s, env);
+        return null;
+      }
+      case "While": {
+        while (Evaluator.eval(node.cond, env)) {
+          try { for (const s of node.body) Evaluator.eval(s, env); }
+          catch (e) {
+            if (e instanceof BreakSignal) break;
+            if (e instanceof ContinueSignal) continue;
+            throw e;
+          }
+        }
+        return null;
+      }
+      case "ForR": {
+        const s = Evaluator.eval(node.start, env);
+        const e = Evaluator.eval(node.end, env);
+        for (let i = s; i <= e; i++) {
+          env.set(node.var, i);
+          try { for (const st of node.body) Evaluator.eval(st, env); }
+          catch (er) {
+            if (er instanceof BreakSignal) return null;
+            if (er instanceof ContinueSignal) continue;
+            throw er;
+          }
+        }
+        return null;
+      }
+      case "ForE": {
+        const seq = Evaluator.eval(node.iter, env);
+        for (const x of seq) {
+          env.set(node.var, x);
+          try { for (const st of node.body) Evaluator.eval(st, env); }
+          catch (er) {
+            if (er instanceof BreakSignal) return null;
+            if (er instanceof ContinueSignal) continue;
+            throw er;
+          }
+        }
+        return null;
+      }
+      case "Func": {
+        const f = new YuiFunction(node.verb, node.params, node.body, env);
+        env.set(node.verb, f);
+        return null;
+      }
+      case "Ret": {
+        const v = node.value ? Evaluator.eval(node.value, env) : null;
+        throw new ReturnSignal(v);
+      }
+      case "Topic": {
+        const tv = Evaluator.eval(node.topic, env);
+        const inner = new Environment(env);
+        inner.topic = tv;
+        for (const s of node.body) Evaluator.eval(s, inner);
+        return null;
+      }
+      case "Expr": return Evaluator.eval(node.expr, env);
+      case "Call": return Evaluator.evalCall(node, env);
+    }
+    throw new RuntimeYuiError(`未対応のノード：${node.type}`);
+  },
+  evalCall(node, env) {
+    const verb = node.verb;
+    const args = {};
+    for (const k of Object.keys(node.args)) args[k] = Evaluator.eval(node.args[k], env);
+    const topic = env.getTopic();
+    const aliasNoToWo = (a) => {
+      if ("の" in a && !("を" in a)) { const r = {...a}; r["を"] = r["の"]; delete r["の"]; return r; }
+      return a;
+    };
+
+    // 1. 組み込み関数
+    if (verb in BUILTINS) {
+      let ba = aliasNoToWo(args);
+      if (topic !== null && !("を" in ba) && TOPIC_VERBS.has(verb)) ba["を"] = topic;
+      return BUILTINS[verb](ba, env);
+    }
+    // 2. ユーザー定義関数
+    if (env.has(verb)) {
+      const f = env.get(verb);
+      if (f instanceof YuiFunction) {
+        const params = new Set(f.params.map(p => p[1]));
+        let ua = args;
+        if ("の" in ua && !params.has("の") && params.has("を") && !("を" in ua)) ua = aliasNoToWo(ua);
+        return f.call(ua);
+      }
+    }
+    // 3. 辞書アクセス
+    const argVals = Object.values(args);
+    if (argVals.length === 1 && argVals[0] && typeof argVals[0] === "object" && !Array.isArray(argVals[0]) && verb in argVals[0]) {
+      return argVals[0][verb];
+    }
+    // 4. 主題のメソッド
+    if (topic !== null && verb in TOPIC_METHODS) {
+      const ba = aliasNoToWo(args);
+      return TOPIC_METHODS[verb](topic, ba, env);
+    }
+    throw new RuntimeYuiError(`関数「${verb}」が定義されていません`);
+  }
+};
+
+// ── Builtins ───────────────────────────────────────────────
+let _outputBuf = [];
+function _print(args, env) {
+  let v = args["を"];
+  if (v === undefined) v = env.getTopic();
+  _outputBuf.push(yuiToStr(v));
+  return null;
+}
+function _length(args, env) {
+  const v = args["を"] !== undefined ? args["を"] : env.getTopic();
+  if (v === null || v === undefined) throw new RuntimeYuiError("長さを求める対象がありません");
+  return v.length;
+}
+function _toStr(args)   { return yuiToStr(args["を"]); }
+function _toInt(args)   { return parseInt(args["を"], 10); }
+function _toFloat(args) { return parseFloat(args["を"]); }
+function _append(args, env) {
+  const target = args["に"] !== undefined ? args["に"] : env.getTopic();
+  const item = args["を"];
+  if (!Array.isArray(target)) throw new RuntimeYuiError("追加先は配列");
+  target.push(item);
+  return null;
+}
+function _appendTail(args, env) {
+  let target = args["へ"];
+  if (target === undefined) target = env.getTopic();
+  if (!Array.isArray(target)) throw new RuntimeYuiError("「末尾へ」は配列に対して使います");
+  target.push(args["を"]);
+  return null;
+}
+function _concat(args) { return args["を"] + args["と"]; }
+function _sum(args, env) {
+  const v = args["を"] !== undefined ? args["を"] : env.getTopic();
+  return v.reduce((a,b)=>a+b, 0);
+}
+function _max(args, env) { return Math.max(...(args["を"] ?? env.getTopic())); }
+function _min(args, env) { return Math.min(...(args["を"] ?? env.getTopic())); }
+function _nth(args, env) {
+  const seq = args["から"] !== undefined ? args["から"] : env.getTopic();
+  const i = args["を"];
+  return seq[i-1];
+}
+function _range(args) {
+  const a = args["から"], b = args["まで"];
+  const out = [];
+  for (let i = a; i <= b; i++) out.push(i);
+  return out;
+}
+// 数学
+const _abs   = (a,e) => Math.abs(a["を"] ?? e.getTopic());
+const _sqrt  = (a,e) => Math.sqrt(a["を"] ?? e.getTopic());
+const _pow   = (a)   => Math.pow(a["を"], a["で"]);
+const _round = (a,e) => Math.round(a["を"] ?? e.getTopic());
+const _floor = (a,e) => Math.floor(a["を"] ?? e.getTopic());
+const _ceil  = (a,e) => Math.ceil (a["を"] ?? e.getTopic());
+const _rand  = (a)   => Math.floor(Math.random() * (Math.floor(a["まで"]) - Math.ceil(a["から"]) + 1)) + Math.ceil(a["から"]);
+// 配列・文字列
+const _reverse = (a,e) => { const v = a["を"] ?? e.getTopic(); return typeof v === "string" ? [...v].reverse().join("") : [...v].reverse(); };
+const _sortAsc = (a,e) => [...(a["を"] ?? e.getTopic())].sort((x,y)=> x<y?-1:x>y?1:0);
+const _sortDsc = (a,e) => [...(a["を"] ?? e.getTopic())].sort((x,y)=> x<y?1:x>y?-1:0);
+const _split   = (a,e) => { const s = a["を"] ?? e.getTopic(); const sep = a["で"] || ""; return sep ? s.split(sep) : [...s]; };
+const _join    = (a,e) => (a["を"] ?? e.getTopic()).map(yuiToStr).join(a["で"] || "");
+const _contains= (a,e) => { const t = a["に"] ?? e.getTopic(); return Array.isArray(t) ? t.includes(a["を"]) : t.indexOf(a["を"]) >= 0; };
+const _position= (a,e) => { const seq = a["から"] ?? e.getTopic(); const idx = seq.indexOf(a["を"]); return idx < 0 ? 0 : idx + 1; };
+const _repeat  = (a)   => { const v = a["を"]; const n = parseInt(a["に"], 10); return typeof v === "string" ? v.repeat(n) : Array(n).fill().flatMap(()=>v); };
+// 高階
+function _callFn(f, x, env) {
+  if (typeof f === "string") {
+    if (f in BUILTINS) return BUILTINS[f]({"を": x}, env);
+    return env.get(f).call({"を": x});
+  }
+  if (f instanceof YuiFunction) return f.call({"を": x});
+  throw new RuntimeYuiError("関数引数が不正");
+}
+const _map    = (a,e) => { const seq = a["に"] ?? a["の"] ?? e.getTopic(); return seq.map(x => _callFn(a["を"], x, e)); };
+const _filter = (a,e) => { const seq = a["から"] ?? e.getTopic(); return seq.filter(x => _callFn(a["を"], x, e)); };
+// 型判定
+const _isInt  = (a,e) => Number.isInteger(a["を"] ?? e.getTopic());
+const _isStr  = (a,e) => typeof (a["を"] ?? e.getTopic()) === "string";
+const _isList = (a,e) => Array.isArray(a["を"] ?? e.getTopic());
+const _isDict = (a,e) => { const v = a["を"] ?? e.getTopic(); return v && typeof v === "object" && !Array.isArray(v); };
+// 辞書
+const _keys   = (a,e) => Object.keys(a["を"] ?? e.getTopic());
+const _values = (a,e) => Object.values(a["を"] ?? e.getTopic());
+const _setDict = (a) => {
+  const d = a["に"]; const k = a["を"]; const v = a["で"];
+  if (!d || typeof d !== "object" || Array.isArray(d)) throw new RuntimeYuiError("「設定」の対象（に）は辞書");
+  d[String(k)] = v;
+  return null;
+};
+const _getDict = (a, e) => {
+  const d = a["から"] ?? e.getTopic(); const k = a["を"];
+  if (!d || typeof d !== "object" || Array.isArray(d)) throw new RuntimeYuiError("「取得」の対象（から）は辞書");
+  return d[String(k)];
+};
+
+// 例外
+const _assert = (a,e) => {
+  const v = (a["を"] !== undefined ? a["を"] : e.getTopic());
+  if (!v) throw new RuntimeYuiError(yuiToStr(a["で"] || "断言失敗"));
+  return null;
+};
+const _throw = (a) => { throw new RuntimeYuiError(yuiToStr(a["を"] || "失敗")); };
+// モジュール（ブラウザでは未対応）
+const _load = () => { throw new RuntimeYuiError("ブラウザ版では「読み込む」は未対応です"); };
+// 三角・対数
+const _sin = (a,e) => Math.sin(a["を"] ?? e.getTopic());
+const _cos = (a,e) => Math.cos(a["を"] ?? e.getTopic());
+const _tan = (a,e) => Math.tan(a["を"] ?? e.getTopic());
+const _log = (a,e) => Math.log(a["を"] ?? e.getTopic());
+const _exp = (a,e) => Math.exp(a["を"] ?? e.getTopic());
+// 統計
+const _median = (a,e) => {
+  const v = [...(a["を"] ?? e.getTopic())].sort((x,y)=>x-y);
+  const n = v.length; if (n === 0) return 0;
+  return n%2 ? v[(n-1)/2] : (v[n/2-1] + v[n/2])/2;
+};
+const _variance = (a,e) => {
+  const v = a["を"] ?? e.getTopic(); if (!v.length) return 0;
+  const m = v.reduce((s,x)=>s+x,0)/v.length;
+  return v.reduce((s,x)=>s+(x-m)**2,0)/v.length;
+};
+const _stddev = (a,e) => Math.sqrt(_variance(a, e));
+// ランダム
+const _shuffle = (a,e) => {
+  const v = [...(a["を"] ?? e.getTopic())];
+  for (let i = v.length-1; i>0; i--) { const j = Math.floor(Math.random()*(i+1)); [v[i],v[j]]=[v[j],v[i]]; }
+  return v;
+};
+const _choice = (a,e) => { const v = a["を"] ?? e.getTopic(); return v[Math.floor(Math.random()*v.length)]; };
+// JSON
+const _toJson = (a,e) => {
+  const clean = (x) => {
+    if (x && typeof x === "object" && !Array.isArray(x)) {
+      const r = {}; for (const k of Object.keys(x)) if (!String(k).startsWith("__")) r[k] = clean(x[k]); return r;
+    }
+    if (Array.isArray(x)) return x.map(clean);
+    return x;
+  };
+  return JSON.stringify(clean(a["を"] ?? e.getTopic()));
+};
+const _fromJson = (a,e) => JSON.parse(a["を"] ?? e.getTopic());
+// 日付
+const _now = () => {
+  const n = new Date();
+  return {
+    "年": n.getFullYear(), "月": n.getMonth()+1, "日": n.getDate(),
+    "時": n.getHours(), "分": n.getMinutes(), "秒": n.getSeconds(),
+    "曜日": ["日","月","火","水","木","金","土"][n.getDay()],
+  };
+};
+const _today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`; };
+// 文字列
+const _trim = (a,e) => (a["を"] ?? e.getTopic()).trim();
+const _upper = (a,e) => (a["を"] ?? e.getTopic()).toUpperCase();
+const _lower = (a,e) => (a["を"] ?? e.getTopic()).toLowerCase();
+const _substr = (a,e) => {
+  const s = a["の"] ?? a["を"] ?? e.getTopic();
+  const i = a["から"] ?? 1; const j = a["まで"] ?? s.length;
+  return s.slice(Math.max(0, parseInt(i,10)-1), parseInt(j,10));
+};
+
+const BUILTINS = {
+  "表示": _print, "入力": (a)=>prompt(yuiToStr(a["を"]||"")),
+  "断言": _assert, "投げる": _throw, "読み込む": _load,
+  "長さ": _length, "文字列にする": _toStr, "整数にする": _toInt, "小数にする": _toFloat,
+  "追加": _append, "末尾追加": _appendTail, "連結": _concat,
+  "合計": _sum, "最大": _max, "最小": _min,
+  "番目取り出す": _nth, "範囲": _range,
+  "反転": _reverse, "昇順": _sortAsc, "降順": _sortDsc,
+  "含む": _contains, "位置": _position,
+  "絶対値": _abs, "平方根": _sqrt, "累乗": _pow,
+  "四捨五入": _round, "床": _floor, "天井": _ceil, "乱数": _rand,
+  "正弦": _sin, "余弦": _cos, "正接": _tan, "対数": _log, "指数": _exp,
+  "中央値": _median, "分散": _variance, "標準偏差": _stddev,
+  "シャッフル": _shuffle, "選ぶ": _choice,
+  "JSON化": _toJson, "JSON解読": _fromJson,
+  "今": _now, "今日": _today,
+  "整形": _trim, "大文字": _upper, "小文字": _lower, "部分": _substr,
+  "分割": _split, "結合": _join, "繰り返し": _repeat,
+  "適用": _map, "抽出": _filter,
+  "整数": _isInt, "文字列": _isStr, "配列": _isList, "辞書": _isDict,
+  "鍵": _keys, "値": _values,
+  "設定": _setDict, "取得": _getDict,
+};
+const TOPIC_VERBS = new Set([
+  "表示","長さ","合計","最大","最小","反転","昇順","降順",
+  "絶対値","平方根","四捨五入","床","天井","鍵","値"
+]);
+const TOPIC_METHODS = {
+  "長さ": (topic) => topic.length,
+  "表示": (topic) => { _outputBuf.push(yuiToStr(topic)); return null; },
+};
+
+// ── Public API ─────────────────────────────────────────────
+function loadStdlib(env) {
+  // 数学定数を環境にバインド
+  env.set("円周率", Math.PI, true);
+  env.set("ネイピア数", Math.E, true);
+  if (typeof STDLIB_SRC === "undefined" || !STDLIB_SRC) return;
+  try {
+    const tokens = tokenize(STDLIB_SRC);
+    const prog = new Parser(tokens).parseProgram();
+    Evaluator.eval(prog, env);
+  } catch (e) {
+    console.warn("stdlib読み込み失敗：", e.message);
+  }
+}
+
+function formatError(msg, source) {
+  const m = /^(\d+)行目/.exec(msg);
+  if (!m) return msg;
+  const lineNo = parseInt(m[1], 10);
+  const lines = source.split("\n");
+  if (lineNo < 1 || lineNo > lines.length) return msg;
+  const pad = " ".repeat(String(lineNo).length + 2);
+  return `${msg}\n${pad}${lineNo} | ${lines[lineNo-1]}`;
+}
+
+let _lastEnv = null;
+function runYui(source) {
+  _outputBuf = [];
+  let env;
+  try {
+    env = new Environment();
+    loadStdlib(env);
+    const tokens = tokenize(source);
+    const prog = new Parser(tokens).parseProgram();
+    Evaluator.eval(prog, env);
+    _lastEnv = env;
+    return { ok: true, output: _outputBuf.join("\n"), env };
+  } catch (e) {
+    _lastEnv = env;
+    const raw = (e instanceof LexError || e instanceof ParseError || e instanceof RuntimeYuiError)
+      ? e.message
+      : `${e.name}: ${e.message}`;
+    return { ok: false, output: _outputBuf.join("\n"), error: formatError(raw, source), env };
+  }
+}
+
+function dumpEnv(env) {
+  if (!env || !env.vars) return "（環境なし）";
+  const entries = [];
+  for (const [k, v] of env.vars) {
+    if (k.startsWith("__") || k === "__builtins__") continue;
+    if (v instanceof YuiFunction) {
+      entries.push(`${k} ＝ <関数：${v.params.map(p => `[${p[0]}]${p[1]}`).join(" ")}>`);
+    } else if (v instanceof Race) {
+      entries.push(`${k} ＝ <種族：${v.attrs.join(", ")}>`);
+    } else {
+      entries.push(`${k} ＝ ${yuiToStr(v)}`);
+    }
+  }
+  return entries.length ? entries.join("\n") : "（変数なし）";
+}
+
+
+const STDLIB_SRC = `※ ════════════════════════════════════════════════════════════
+※   結（Yui）標準ライブラリ stdlib.yui
+※   著作権表記：RTCK
+※
+※   このファイルは、yui.py / repl.html の起動時に
+※   自動的に読み込まれ、グローバル環境にロードされる。
+※   組み込み関数（BUILTINS）と異なり、Yui自身で書かれている。
+※ ════════════════════════════════════════════════════════════
+
+※ ──── 数値 ────────────────────────────────────────────
+
+関数：[X]を 二乗する
+    戻り値：X * X
+おわり
+
+関数：[X]を 立方する
+    戻り値：X * X * X
+おわり
+
+関数：[N]を 階乗する
+    もし N <= 1 ならば
+        戻り値：1
+    おわり
+    戻り値：N * ((N - 1)を 階乗する)
+おわり
+
+関数：[A]と[B]を 最大公約数
+    もし B == 0 ならば
+        戻り値：A
+    おわり
+    戻り値：(B と (A % B) を 最大公約数)
+おわり
+
+関数：[A]と[B]を 最小公倍数
+    戻り値：(A * B) / (A と B を 最大公約数)
+おわり
+
+関数：[N]を 偶数判定する
+    戻り値：N % 2 == 0
+おわり
+
+関数：[N]を 奇数判定する
+    戻り値：N % 2 != 0
+おわり
+
+関数：[N]を 素数判定する
+    もし N が 2 未満 ならば
+        戻り値：偽
+    おわり
+    もし N が 2 と 等しい ならば
+        戻り値：真
+    おわり
+    各 i を 2から(N - 1)まで 繰り返す
+        もし i * i が N より 大きい ならば
+            やめる
+        おわり
+        もし N % i == 0 ならば
+            戻り値：偽
+        おわり
+    おわり
+    戻り値：真
+おわり
+
+関数：[N]を フィボナッチする
+    もし N < 2 ならば
+        戻り値：N
+    おわり
+    a を 0 とする
+    b を 1 とする
+    各 i を 1から(N - 1)まで 繰り返す
+        次値 を a + b とする
+        a を b とする
+        b を 次値 とする
+    おわり
+    戻り値：b
+おわり
+
+※ ──── 配列・統計 ─────────────────────────────────────
+
+関数：[L]の 平均
+    もし (Lの長さ) == 0 ならば
+        戻り値：0
+    おわり
+    戻り値：(Lの合計) / (Lの長さ)
+おわり
+
+関数：[L]の 範囲幅
+    戻り値：(Lの最大) - (Lの最小)
+おわり
+
+関数：[L]を 重複除去する
+    結果 を [] とする
+    各 x を L について 繰り返す
+        もし (xを 結果に 含む) でない ならば
+            xを 結果に 追加せよ
+        おわり
+    おわり
+    戻り値：結果
+おわり
+
+関数：[L]を [N]に 先頭取り出す
+    結果 を [] とする
+    i を 1 とする
+    各 x を L について 繰り返す
+        もし i が N より 大きい ならば
+            やめる
+        おわり
+        xを 結果に 追加せよ
+        i を i + 1 とする
+    おわり
+    戻り値：結果
+おわり
+
+関数：[L]を [N]に 末尾取り出す
+    開始 を (Lの長さ) - N + 1 とする
+    もし 開始 < 1 ならば
+        開始 を 1 とする
+    おわり
+    結果 を [] とする
+    各 i を 開始から(Lの長さ)まで 繰り返す
+        ((Lから iを 番目取り出す)) を 結果に 追加せよ
+    おわり
+    戻り値：結果
+おわり
+
+関数：[X]を 二倍要素する
+    戻り値：X * 2
+おわり
+
+関数：[L]を 倍化する
+    戻り値：(「二倍要素する」を Lに 適用)
+おわり
+
+※ ──── 文字列 ─────────────────────────────────────────
+
+関数：[S]を 空白分割する
+    戻り値：(Sを「 」で分割)
+おわり
+
+関数：[S]を [N]に 連結繰り返し
+    結果 を 「」 とする
+    各 i を 1からNまで 繰り返す
+        結果 を 結果 + S とする
+    おわり
+    戻り値：結果
+おわり
+
+※ ──── 真偽 ──────────────────────────────────────────
+
+関数：[A]と[B]を どちらか真
+    戻り値：A または B
+おわり
+
+関数：[A]と[B]を 両方真
+    戻り値：A かつ B
+おわり
+
+※ ──── 範囲生成 ──────────────────────────────────────
+
+関数：[A]を [B]に [D]で 等差列
+    結果 を [] とする
+    i を A とする
+    i が B 以下 のあいだ 繰り返す
+        i を 結果に 追加せよ
+        i を i + D とする
+    おわり
+    戻り値：結果
+おわり
+`;
+const DRAMA_SRC = `※ ════════════════════════════════════════════════════════════
+※   結（Yui）劇作支援ライブラリ drama.yui
+※   著作権表記：RTCK
+※
+※   ノベルゲーム・短編シナリオ・TRPG台本などを Yui で書くための
+※   薄い DSL 層。種族・主題持続・自由語順を最大限に活かす。
+※ ════════════════════════════════════════════════════════════
+
+※ ──── キャラクター ────────────────────────────────────
+
+種族 キャラ：
+    属性：名前, 一人称, 口調, 好感度
+おわり
+
+※ ──── 描写・台詞 ────────────────────────────────────
+
+関数：[文]を 描写する
+    『　{文}』を表示せよ
+おわり
+
+関数：[話者]が[セリフ]と 言う
+    『{話者の名前}「{セリフ}」』を表示せよ
+おわり
+
+関数：[話者]が[セリフ]と 思う
+    『（{話者の名前}：{セリフ}）』を表示せよ
+おわり
+
+関数：[題名]を 場面開始
+    「」を表示せよ
+    『◆ {題名}』を表示せよ
+    「────────────────────────────」を表示せよ
+おわり
+
+関数：[題名]を 場面区切り
+    「」を表示せよ
+    『┄┄┄ {題名} ┄┄┄』を表示せよ
+おわり
+
+※ ──── 選択肢 ────────────────────────────────────────
+
+関数：[一覧]から 選択肢提示
+    「」を表示せよ
+    各 i を 1から(一覧の長さ)まで 繰り返す
+        『  {i}）{一覧[i]}』を表示せよ
+    おわり
+    答 を (「  → 番号で選択：」を 入力) とする
+    番号 を (答を 整数にする) とする
+    もし 番号 が 1 より 小さい かつ 番号 が (一覧の長さ) より 大きい ならば
+        戻り値：1
+    おわり
+    戻り値：番号
+おわり
+
+※ ──── 関係値・好感度 ────────────────────────────────
+
+関数：[キャラ]に [増分]を 好感度加算
+    現在 を キャラの好感度 とする
+    新値 を 現在 + 増分 とする
+    キャラに「好感度」を 新値で 設定
+    もし 増分 が 0 より 大きい ならば
+        『　［{キャラの名前} の好感度 +{増分} → {新値}］』を表示せよ
+    そうでなければ もし 増分 が 0 より 小さい ならば
+        『　［{キャラの名前} の好感度 {増分} → {新値}］』を表示せよ
+    おわり
+おわり
+
+関数：[キャラ]の 好感度判定
+    戻り値：キャラの好感度
+おわり
+
+※ ──── ED 判定支援 ────────────────────────────────────
+
+関数：[キャラ]のED種別
+    値 を キャラの好感度 とする
+    もし 値 が 1000 以上 ならば
+        戻り値：「真ED：書き換えられた葵」
+    おわり
+    もし 値 が 80 以上 ならば
+        戻り値：「両想いED」
+    おわり
+    もし 値 が 50 以上 ならば
+        戻り値：「親友ED」
+    おわり
+    もし 値 が 20 以上 ならば
+        戻り値：「微妙ED」
+    おわり
+    戻り値：「破局ED」
+おわり
+
+※ ──── ナレーション補助 ──────────────────────────────
+
+関数：[句]を 強調
+    戻り値：『＊{句}＊』
+おわり
+
+関数：[句]を ささやき
+    戻り値：『（{句}）』
+おわり
+`;
+
+
+import { CreateMLCEngine } from "https://esm.run/@mlc-ai/web-llm";
+
+let MODEL_ID = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
+
+/* ============================================================
+ * モード別プロンプト
+ * ============================================================ */
+const PROMPTS = {
+  aoi: `あなたは「葵」というキャラ。一人称「俺」。クールで寡黙、本心は寂しがり。1〜2文で返す。括弧書き禁止。`,
+  sakura: `あなたは「さくら」というキャラ。一人称「私」。控えめで優しい敬語。1〜2文で返す。括弧書き禁止。`,
+  narrator: `あなたはナレーター。葵とさくらの会話を1文で第三者視点から描写する。情景や心情の機微を淡く挿入する。括弧書き禁止。`,
+  // 逆転モード
+  aoi_reverse: `あなたは「葵」を演じる別人格。一人称「俺」だが内面は内向的で控えめ。語尾に「……」を多用。1〜2文。`,
+  sakura_reverse: `あなたは「さくら」を演じる別人格。一人称「私」だがクールで寡黙、ぶっきらぼう。1〜2文。`,
+  // 言語実験
+  aoi_en: `You are "Aoi", a quiet first-year girl in Japan. Reply in English in 1-2 short sentences. Cool but inwardly lonely. No parentheticals.`,
+  sakura_jp: `あなたは「さくら」。控えめで優しい敬語で1〜2文。括弧書き禁止。`,
+  translator_to_jp: `次の英語を、自然な日本語の話し言葉に1文で訳してください。訳のみ出力。`,
+  translator_to_en: `Translate the following Japanese to natural conversational English in 1 sentence. Output only the translation.`,
+  // コード対話モード
+  aoi_code: `あなたは「葵」。あなたの感情や行動を、結（Yui）言語の1行のコードとして表現してください。
+構文例：
+  さくら に 5 を 好感度加算
+  「俺は…」を 描写する
+  葵 が 「……」と 言う
+出力は1行のYuiコードのみ。日本語の説明や括弧書きは不要。`,
+  sakura_code: `あなたは「さくら」。あなたの感情や行動を、結（Yui）言語の1行のコードとして表現してください。
+構文例：
+  葵 に 3 を 好感度加算
+  「私は…」を 描写する
+  さくら が 「……」と 思う
+出力は1行のYuiコードのみ。`,
+};
+
+const MODES = {
+  duo: { label: "2者対話", roles: ["aoi", "sakura"] },
+  trio: { label: "3者対話", roles: ["aoi", "sakura", "narrator"] },
+  reverse: { label: "逆転", roles: ["aoi_reverse", "sakura_reverse"] },
+  bilingual: { label: "言語実験", roles: ["aoi_en", "sakura_jp"] },
+  code: { label: "コードで話す", roles: ["aoi_code", "sakura_code"], evalYui: true },
+};
+
+let currentMode = "duo";
+let engine = null;
+let modelLoaded = false;
+let running = false;
+let stopRequested = false;
+let turnCount = 0;
+let yuiLineCount = 0;
+
+const histories = {};   // role -> [{role, content}]
+const summaries = {};   // role -> string
+const state = {
+  場面: "教室の朝",
+  時刻: "朝",
+  葵好感度: 30,
+  さくら好感度: 30,
+  最後の発言者: null,
+};
+
+/* ============================================================
+ * Yui共有環境（コードで話すモード用）
+ * ============================================================ */
+let yuiEnv = null;
+function initYuiEnv() {
+  yuiEnv = new Environment();
+  loadStdlib(yuiEnv);
+  // drama.yui を埋め込みロード
+  try {
+    const tokens = tokenize(DRAMA_SRC);
+    const prog = new Parser(tokens).parseProgram();
+    Evaluator.eval(prog, yuiEnv);
+    // キャラを生成
+    const setupSrc = `
+さくら を 新しい キャラ(名前 → 「さくら」, 一人称 → 「私」, 口調 → 「敬語」, 好感度 → ${state.さくら好感度}) とする
+葵 を 新しい キャラ(名前 → 「葵」, 一人称 → 「俺」, 口調 → 「中性」, 好感度 → ${state.葵好感度}) とする
+`;
+    const t2 = tokenize(setupSrc);
+    const p2 = new Parser(t2).parseProgram();
+    Evaluator.eval(p2, yuiEnv);
+  } catch (e) {
+    console.warn("yuiEnv init失敗:", e);
+  }
+}
+function syncYuiStateToWorld() {
+  try {
+    const aoi = yuiEnv.get("葵");
+    const sakura = yuiEnv.get("さくら");
+    if (aoi) state.葵好感度 = aoi["好感度"];
+    if (sakura) state.さくら好感度 = sakura["好感度"];
+  } catch (e) {}
+}
+function evalYuiLine(src) {
+  try {
+    const captured = [];
+    const orig = BUILTINS["表示"];
+    BUILTINS["表示"] = (a, env) => { let v = a["を"]; if (v === undefined) v = env.getTopic(); captured.push(yuiToStr(v)); return null; };
+    const tokens = tokenize(src);
+    const prog = new Parser(tokens).parseProgram();
+    Evaluator.eval(prog, yuiEnv);
+    BUILTINS["表示"] = orig;
+    syncYuiStateToWorld();
+    return { ok: true, output: captured.join("\n") };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/* ============================================================
+ * UI 要素
+ * ============================================================ */
+const $ = (id) => document.getElementById(id);
+const log = $("log"); const yuiOut = $("yui-out");
+const loaderEl = $("loader"); const progressBar = $("progress-bar"); const loaderMsg = $("loader-msg");
+const startBtn = $("startBtn"); const stopBtn = $("stopBtn"); const resetBtn = $("resetBtn"); const interventBtn = $("interventBtn");
+const statusIndicator = $("status-indicator"); const modeInd = $("mode-ind"); const yuiInd = $("yui-ind");
+
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+/* パラメータ更新 */
+const params = { temp: 0.8, topp: 0.95, maxtok: 100, rep: 1.15, delay: 500, ctx: 6, comp: 3, scene: 8, autointer: 0.2 };
+function bindParam(id, key, transform = (x)=>x, displayId = null) {
+  const el = $(id); const dis = displayId ? $(displayId) : null;
+  const update = () => {
+    const raw = el.type === "number" ? parseFloat(el.value) : parseInt(el.value, 10);
+    params[key] = transform(raw);
+    if (dis) dis.textContent = typeof params[key] === "number" ? params[key].toFixed(2) : String(params[key]);
+  };
+  el.addEventListener("input", update); update();
+}
+bindParam("p-temp", "temp", x => x/10, "p-temp-v");
+bindParam("p-topp", "topp", x => x/100, "p-topp-v");
+bindParam("p-maxtok", "maxtok");
+bindParam("p-rep", "rep", x => x/100, "p-rep-v");
+bindParam("p-delay", "delay");
+bindParam("p-ctx", "ctx");
+bindParam("p-comp", "comp");
+bindParam("p-scene", "scene");
+bindParam("p-autointer", "autointer", x => x/100, "p-autointer-v");
+$("p-autointer-v").textContent = "20%";
+
+/* プロンプト編集 */
+$("prompt-aoi").value = PROMPTS.aoi;
+$("prompt-sakura").value = PROMPTS.sakura;
+$("prompt-narrator").value = PROMPTS.narrator;
+function getCustomPrompts() {
+  return {
+    aoi: $("prompt-aoi").value || PROMPTS.aoi,
+    sakura: $("prompt-sakura").value || PROMPTS.sakura,
+    narrator: $("prompt-narrator").value || PROMPTS.narrator,
+  };
+}
+
+/* モード切替 */
+document.querySelectorAll("#modes button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (running) return;
+    document.querySelectorAll("#modes button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    currentMode = btn.dataset.mode;
+    modeInd.textContent = MODES[currentMode].label;
+    resetAll();
+  });
+});
+
+/* 状態更新 */
+function updateStateBar() {
+  $("s-scene").textContent = state.場面;
+  $("s-time").textContent = state.時刻;
+  $("s-aoi").textContent = state.葵好感度;
+  $("s-sakura").textContent = state.さくら好感度;
+  $("s-turn").textContent = turnCount;
+  const compCount = Object.values(summaries).filter(s => s).length;
+  $("s-comp").textContent = compCount > 0 ? `${compCount}件` : "なし";
+}
+
+/* ログ */
+function addLog(role, text, cls) {
+  const div = document.createElement("div");
+  div.className = "turn " + (cls || role);
+  if (cls === "system" || cls === "compress") {
+    div.textContent = (cls === "compress" ? "［文脈圧縮］" : "") + text;
+  } else if (cls === "code") {
+    div.innerHTML = highlightYui(text);
+  } else if (cls === "translation") {
+    div.textContent = text;
+  } else {
+    const roleLabel = ({aoi:"葵",aoi_reverse:"葵",aoi_en:"葵",aoi_code:"葵",sakura:"さくら",sakura_reverse:"さくら",sakura_jp:"さくら",sakura_code:"さくら",narrator:"ナレーター"})[role] || role;
+    div.innerHTML = `<span class="role">${roleLabel}：</span>${escapeHtml(text)}`;
+  }
+  log.appendChild(div); log.scrollTop = log.scrollHeight;
+}
+
+/* Yuiコード表示 */
+function highlightYui(line) {
+  const KW = /^(もし|ならば|おわり|関数|戻り値|真|偽|無|とする|である|せよ|だろうか|新しい|種族|属性)/;
+  const PT = /^(から|まで|より|を|に|で|へ|と|は|が|の)(?=[^ぁ-んァ-ヶー一-龥]|$)/;
+  const cmIdx = line.indexOf("※");
+  let head = cmIdx >= 0 ? line.slice(0, cmIdx) : line;
+  let tail = cmIdx >= 0 ? line.slice(cmIdx) : "";
+  let r = ""; let i = 0;
+  while (i < head.length) {
+    const c = head[i];
+    if (c === "「" || c === "『") {
+      const cl = c === "「" ? "」" : "』";
+      let j = head.indexOf(cl, i+1); if (j === -1) j = head.length - 1;
+      r += `<span class="tok-str">${escapeHtml(head.slice(i, j+1))}</span>`;
+      i = j + 1; continue;
+    }
+    const sub = head.slice(i); let m;
+    if ((m = sub.match(KW))) { r += `<span class="tok-kw">${escapeHtml(m[0])}</span>`; i += m[0].length; }
+    else if ((m = sub.match(PT))) { r += `<span class="tok-particle">${escapeHtml(m[0])}</span>`; i += m[0].length; }
+    else if ((m = sub.match(/^(\d[\d_.]*)/))) { r += `<span class="tok-num">${escapeHtml(m[0])}</span>`; i += m[0].length; }
+    else { r += escapeHtml(c); i++; }
+  }
+  if (tail) r += `<span class="tok-comment">${escapeHtml(tail)}</span>`;
+  return r;
+}
+
+function addYuiCode(role, text, fromCodeMode) {
+  yuiLineCount++;
+  yuiInd.textContent = `行 ${yuiLineCount}`;
+  let yuiSrc;
+  if (fromCodeMode) {
+    yuiSrc = text;
+  } else {
+    const speaker = ({aoi:"葵",aoi_reverse:"葵",aoi_en:"葵",aoi_code:"葵",sakura:"さくら",sakura_reverse:"さくら",sakura_jp:"さくら",sakura_code:"さくら"})[role];
+    if (role === "narrator") yuiSrc = `「${text}」を 描写する`;
+    else if (speaker) yuiSrc = `${speaker} が 「${text}」と 言う`;
+    else return;
+  }
+  const div = document.createElement("div"); div.className = "turn";
+  const head = document.createElement("div"); head.className = "turn-head";
+  head.textContent = `T${turnCount} / 葵=${state.葵好感度} / さくら=${state.さくら好感度}`;
+  const body = document.createElement("div");
+  body.innerHTML = yuiSrc.split("\n").map(l => highlightYui(l)).join("\n");
+  div.appendChild(head); div.appendChild(body);
+  yuiOut.appendChild(div); yuiOut.scrollTop = yuiOut.scrollHeight;
+}
+
+/* ============================================================
+ * LLM 推論
+ * ============================================================ */
+function getSystemPrompt(role) {
+  const customs = getCustomPrompts();
+  const map = { aoi: customs.aoi, sakura: customs.sakura, narrator: customs.narrator,
+    aoi_reverse: PROMPTS.aoi_reverse, sakura_reverse: PROMPTS.sakura_reverse,
+    aoi_en: PROMPTS.aoi_en, sakura_jp: PROMPTS.sakura_jp,
+    aoi_code: PROMPTS.aoi_code, sakura_code: PROMPTS.sakura_code };
+  return map[role] || "";
+}
+
+function buildStateSnap() {
+  return `【現在の状態】場面=${state.場面}、時刻=${state.時刻}、葵→さくら好感度=${state.葵好感度}、さくら→葵好感度=${state.さくら好感度}`;
+}
+
+async function inferOne(role, userText) {
+  const sys = getSystemPrompt(role);
+  const summary = summaries[role] || "";
+  const history = histories[role] || [];
+  const stateSnap = buildStateSnap();
+  const messages = [
+    { role: "system", content: sys + "\n\n" + stateSnap + (summary ? "\n【これまでの要約】" + summary : "") },
+    ...history,
+    { role: "user", content: userText },
+  ];
+  const reply = await engine.chat.completions.create({
+    messages, temperature: params.temp, top_p: params.topp,
+    max_tokens: params.maxtok, frequency_penalty: 0,
+    repetition_penalty: params.rep,
+  });
+  let text = reply.choices[0].message.content.trim();
+  text = text.replace(/^[「『](.+)[」』]$/s, "$1").trim();
+  // 役割名のprefixを除去
+  text = text.replace(/^(葵|さくら|ナレーター)[：:]\s*/, "").trim();
+  return text || "……";
+}
+
+async function summarize(role) {
+  const h = histories[role];
+  if (!h || h.length < params.ctx * 2) return;
+  const old = h.splice(0, h.length - params.ctx);
+  const dialog = old.map(m => (m.role === "user" ? "相手" : "自分") + "：" + m.content).join("\n");
+  const prev = summaries[role] || "";
+  const prompt = (prev ? `これまでの要約：${prev}\n\n` : "") +
+    `次の会話を、感情と関係性が伝わるよう1〜2文で要約してください：\n${dialog}\n\n要約：`;
+  try {
+    const r = await engine.chat.completions.create({
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.3, max_tokens: 80,
+    });
+    summaries[role] = r.choices[0].message.content.trim().replace(/^要約[：:]\s*/, "");
+    return summaries[role];
+  } catch (e) { console.warn("summarize失敗", e); }
+}
+
+/* ============================================================
+ * 介入
+ * ============================================================ */
+const INTERVENTIONS = [
+  { event: "雨が降りはじめた", scene: "雨の校舎" },
+  { event: "ベルが鳴った", scene: "次の授業へ" },
+  { event: "風が桜の花びらを散らした", scene: "桜散る" },
+  { event: "教室に光が差し込んだ", scene: "夕方" },
+  { event: "誰かの足音が遠ざかる", scene: "静寂" },
+  { event: "校内放送が流れた", scene: "放送中" },
+  { event: "蝉の声が響いた", scene: "夏" },
+  { event: "雪がちらつきはじめた", scene: "冬" },
+];
+function injectIntervention(forced) {
+  const it = INTERVENTIONS[Math.floor(Math.random() * INTERVENTIONS.length)];
+  state.場面 = it.scene; state.時刻 = it.scene.includes("夕") ? "夕方" : state.時刻;
+  addLog("narrator", `── ${it.event} ──`, "system");
+  // 全エージェントに介入をフィードバック
+  for (const role of MODES[currentMode].roles) {
+    if (!histories[role]) histories[role] = [];
+    histories[role].push({ role: "user", content: `［ナレーター］${it.event}` });
+  }
+  updateStateBar();
+}
+
+/* ============================================================
+ * 状態推定
+ * ============================================================ */
+function estimateAffinityChange(speaker, text) {
+  const positive = /好き|ありがとう|嬉しい|一緒|大切|綺麗|可愛い|はい|ええ/;
+  const negative = /嫌い|消えろ|帰れ|無理|嫌だ|気持ち悪/;
+  if (negative.test(text)) return -8;
+  if (positive.test(text)) return +5;
+  if (text.length > 30) return +1;
+  return 0;
+}
+
+/* ============================================================
+ * メインループ
+ * ============================================================ */
+async function autoLoop() {
+  const mode = MODES[currentMode];
+  const roles = mode.roles;
+  let idx = 0;
+  // 初期入力（1人目への発話プロンプト）
+  let lastUtterance = "（沈黙が流れる）";
+  if (currentMode === "code") {
+    initYuiEnv();
+    lastUtterance = "（場面が始まる。最初のYui1行を書いて。）";
+  } else {
+    lastUtterance = "（場面が始まった。最初に発言してください。）";
+  }
+
+  while (!stopRequested) {
+    const role = roles[idx % roles.length];
+    const isNarrator = role === "narrator";
+    statusIndicator.textContent = `${role} 推論中…`;
+    let text;
+    try {
+      // 言語実験モード：アシスタント用に翻訳を仲介
+      if (currentMode === "bilingual" && idx > 0) {
+        // 前の発言を翻訳して渡す
+        const prevRole = roles[(idx - 1) % roles.length];
+        if (prevRole === "aoi_en" && role === "sakura_jp") {
+          // EN -> JP
+          const tr = await engine.chat.completions.create({
+            messages: [{ role: "system", content: PROMPTS.translator_to_jp }, { role: "user", content: lastUtterance }],
+            temperature: 0.3, max_tokens: 80,
+          });
+          const jpText = tr.choices[0].message.content.trim();
+          addLog("translation", `（訳）${jpText}`, "translation");
+          lastUtterance = jpText;
+        } else if (prevRole === "sakura_jp" && role === "aoi_en") {
+          // JP -> EN
+          const tr = await engine.chat.completions.create({
+            messages: [{ role: "system", content: PROMPTS.translator_to_en }, { role: "user", content: lastUtterance }],
+            temperature: 0.3, max_tokens: 80,
+          });
+          const enText = tr.choices[0].message.content.trim();
+          addLog("translation", `(EN) ${enText}`, "translation");
+          lastUtterance = enText;
+        }
+      }
+      text = await inferOne(role, lastUtterance);
+    } catch (e) {
+      addLog("system", "推論失敗：" + e.message, "system");
+      break;
+    }
+    if (stopRequested) break;
+
+    if (currentMode === "code") {
+      addLog(role, text, "code");
+      const r = evalYuiLine(text);
+      if (!r.ok) addLog("system", `Yuiエラー：${r.error}`, "system");
+      else if (r.output) addLog("narrator", `（実行：${r.output}）`, "system");
+    } else {
+      addLog(role, text);
+    }
+    addYuiCode(role, text, currentMode === "code");
+    turnCount++;
+
+    // 状態更新（コードモード以外）
+    if (currentMode !== "code") {
+      if (role === "aoi" || role === "aoi_reverse" || role === "aoi_en" || role === "aoi_code") {
+        state.葵好感度 += estimateAffinityChange(role, text);
+      } else if (role === "sakura" || role === "sakura_reverse" || role === "sakura_jp" || role === "sakura_code") {
+        state.さくら好感度 += estimateAffinityChange(role, text);
+      }
+    }
+
+    // 履歴に追加
+    for (const r2 of roles) {
+      if (!histories[r2]) histories[r2] = [];
+      const hRole = (r2 === role) ? "assistant" : "user";
+      histories[r2].push({ role: hRole, content: text });
+    }
+    lastUtterance = text;
+
+    // 場面遷移
+    if (turnCount > 0 && turnCount % params.scene === 0) {
+      injectIntervention(true);
+    } else if (params.autointer > 0 && Math.random() < params.autointer / params.scene) {
+      injectIntervention(false);
+    }
+
+    // 圧縮
+    if (turnCount > 0 && turnCount % params.comp === 0) {
+      statusIndicator.textContent = "コンテキスト圧縮中…";
+      for (const r2 of roles) {
+        const before = (histories[r2] || []).length;
+        if (before > params.ctx * 2) {
+          const sum = await summarize(r2);
+          if (sum) addLog("compress", `[${r2}] ${sum}`, "compress");
+        }
+      }
+    }
+
+    updateStateBar();
+    idx++;
+    await sleep(params.delay);
+  }
+  statusIndicator.textContent = "停止";
+  running = false; stopRequested = false;
+  startBtn.disabled = false; stopBtn.disabled = true;
+  interventBtn.disabled = true;
+}
+
+/* ============================================================
+ * 初期化・操作
+ * ============================================================ */
+async function initWebLLM() {
+  const sel = document.getElementById("model-select");
+  if (sel) MODEL_ID = sel.value || MODEL_ID;
+  const pw = document.getElementById("progress-wrap");
+  const lm = document.getElementById("loader-msg");
+  const ls = document.getElementById("loader-start");
+  if (pw) pw.style.display = "block";
+  if (lm) lm.style.display = "block";
+  if (ls) ls.disabled = true;
+  if (sel) sel.disabled = true;
+  try {
+    engine = await CreateMLCEngine(MODEL_ID, {
+      initProgressCallback: (report) => {
+        loaderMsg.textContent = report.text || "ロード中…";
+        if (typeof report.progress === "number") progressBar.style.width = `${Math.round(report.progress * 100)}%`;
+      },
+    });
+    modelLoaded = true; loaderEl.style.display = "none";
+    statusIndicator.textContent = "待機中"; startBtn.disabled = false;
+    addLog("system", `${MODEL_ID.split("-MLC")[0]} ロード完了。モードを選んで開始してください。`, "system");
+  } catch (e) {
+    loaderMsg.textContent = "エラー：" + e.message;
+    progressBar.style.background = "#e07a5f";
+    if (ls) ls.disabled = false;
+    if (sel) sel.disabled = false;
+  }
+}
+
+function resetAll() {
+  for (const k of Object.keys(histories)) delete histories[k];
+  for (const k of Object.keys(summaries)) delete summaries[k];
+  state.場面 = "教室の朝"; state.時刻 = "朝";
+  state.葵好感度 = 30; state.さくら好感度 = 30;
+  turnCount = 0; yuiLineCount = 0; yuiInd.textContent = "行 0";
+  log.innerHTML = ""; yuiOut.innerHTML = "";
+  addLog("system", `モード「${MODES[currentMode].label}」にリセット。`, "system");
+  updateStateBar();
+}
+
+startBtn.addEventListener("click", () => {
+  if (running || !modelLoaded) return;
+  running = true; stopRequested = false;
+  startBtn.disabled = true; stopBtn.disabled = false; interventBtn.disabled = false;
+  autoLoop();
+});
+stopBtn.addEventListener("click", () => {
+  stopRequested = true;
+  if (engine && engine.interruptGenerate) engine.interruptGenerate();
+});
+resetBtn.addEventListener("click", () => {
+  if (running) return;
+  resetAll();
+});
+interventBtn.addEventListener("click", () => { injectIntervention(true); });
+$("loader-skip").addEventListener("click", () => {
+  loaderEl.style.display = "none";
+  modelLoaded = true; startBtn.disabled = false;
+  statusIndicator.textContent = "オフライン（デモ）";
+  engine = {
+    chat: { completions: { create: async ({messages}) => {
+      const last = messages[messages.length-1].content || "";
+      const sys = messages[0]?.content || "";
+      let dummy;
+      if (sys.includes("ナレーター")) dummy = "風が窓を叩く音だけが、二人のあいだを通り抜けた。";
+      else if (sys.includes("English")) dummy = "...I think I'm starting to understand.";
+      else if (sys.includes("Yui")) dummy = `葵 が 「……」と 思う`;
+      else dummy = "……お前の言うこと、少しわかった気がする。";
+      return { choices: [{ message: { content: dummy }}]};
+    }}},
+    interruptGenerate: () => {},
+  };
+  addLog("system", "オフラインモード。LLMの代わりにダミー応答が出ます。", "system");
+});
+
+updateStateBar();
+const _ls = document.getElementById("loader-start");
+if (_ls) _ls.addEventListener("click", () => initWebLLM());
+</script>
+</body>
+</html>

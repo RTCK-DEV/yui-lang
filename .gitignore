@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# エディタ
+.vscode/
+.idea/
+*.swp
+
+# 実行時出力
+outputs/
+
+# ローカルメモリ / エージェント作業領域
+.remember/
