@@ -19,8 +19,6 @@ venv/
 .idea/
 *.swp
 
-# 実行時出力
-outputs/
 
 # ローカルメモリ / エージェント作業領域
 .remember/

@@ -97,15 +97,18 @@ python3 yui.py
 | `repl.html` | ブラウザ版REPL。単一HTMLファイルに `yui.js` と stdlib を埋め込み |
 | `drama.yui` | 劇作支援ライブラリ。ノベルゲーム・短編シナリオ・TRPG台本用の薄いDSL層 |
 | `drama_player.html` | `drama.yui` で書かれたシナリオのブラウザプレイヤー |
-| `ai_player.html` | WebLLM（Gemma-2-2b-it）をブラウザ内で動かし、キャラクターと対話する実験 |
+| `ai_player.html` | WebLLM でブラウザ内にLLMを載せ、キャラクターと対話する実験 |
 | `ai_dialog.html` | 複数のAIキャラクター同士を会話させるマルチエージェント実験 |
 | `ai_branch.html` | AI生成による分岐ツリーの可視化実験 |
 | `samples/` | サンプル21本 |
 | `tools/build_html.py` | `yui.js` と `stdlib.yui` を5つの HTML へ埋め込むビルドスクリプト |
 | `tools/diff_impls.py` | 2つの実装の挙動差を測る調査用ツール |
+| `tools/browser_check.mjs` | 5つの HTML を実ブラウザで開いて操作する検証ツール |
 | `tests/` | テスト。`cases.json` を2つの実装が共有する |
 
-`ai_*.html` は [WebLLM](https://github.com/mlc-ai/web-llm) を使うため **WebGPU対応ブラウザ** が必要。初回はモデル（約1.5GB）のダウンロードが走る。
+`ai_*.html` は [WebLLM](https://github.com/mlc-ai/web-llm) を使うため **WebGPU対応ブラウザ** が必要。モデルは画面上部のセレクタで選べる（既定は `ai_player.html` / `ai_dialog.html` が Llama 3.2 3B Instruct、`ai_branch.html` が Hermes 3 Llama 3.2 3B）。初回はモデルのダウンロードが走り、大きさは選択によって 0.8GB〜2.4GB。
+
+3本とも「スキップ（オフラインデモ）」を選べば、モデルを落とさずに UI と Yui の実行部分だけ試せる。
 
 ---
 
@@ -175,6 +178,18 @@ python3 tools/build_html.py --check   # ずれていれば一覧を出して終�
 ```bash
 python3 tools/diff_impls.py --all     # 組み込み関数 × 引数型、演算子 × 型 を総当たりで比較
 ```
+
+### ブラウザでの検証
+
+`tests/js_test.mjs` は Node 上でインタプリタを動かすため、HTML の UI 側——とくに WebLLM を使う `ai_*.html`——には手が届かない。そこは実ブラウザで確かめる。
+
+```bash
+npm install playwright && npx playwright install chromium
+node tools/browser_check.mjs          # 5つの HTML を開いて操作する
+node tools/browser_check.mjs --show   # 画面を出して実行
+```
+
+WebLLM の CDN はスタブに差し替わり、各ページが期待する応答書式で返す。「LLM 出力 → 解析 → Yui コード生成 → インタプリタ実行 → 描画」の経路が、モデルのダウンロードもネットワークもなしで通る。Playwright を別途入れる必要があるため、依存なしで走る `tests/` には含めていない。
 
 ---
 
