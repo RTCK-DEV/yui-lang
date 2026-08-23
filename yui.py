@@ -11,6 +11,7 @@
 from __future__ import annotations
 import sys
 import re
+import os.path as _os_path
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -1184,16 +1185,80 @@ class BreakSignal(Exception): pass
 class ContinueSignal(Exception): pass
 
 
+# 組み込み関数の引数型。builtin_types.json が唯一の原本で、
+# ブラウザ実装へは tools/build_html.py が同じ内容を埋め込む。
+_ARG_TYPES: dict[str, dict[str, str]] = {}
+
+def _load_arg_types() -> None:
+    global _ARG_TYPES
+    import json as _json
+    path = _os_path.join(_os_path.dirname(_os_path.abspath(__file__)), "builtin_types.json")
+    with open(path, encoding="utf-8") as f:
+        _ARG_TYPES = {k: v for k, v in _json.load(f).items() if not k.startswith("_")}
+
+
+def _matches_type(v: Any, t: str) -> bool:
+    """値が型名に合うか。型名は SPEC 4 の型システムに対応する。"""
+    if t == "数値":
+        return isinstance(v, (int, float)) and not isinstance(v, bool)
+    if t == "整数":
+        return isinstance(v, int) and not isinstance(v, bool)
+    if t == "文字列":
+        return isinstance(v, str)
+    if t == "配列":
+        return isinstance(v, list)
+    if t == "辞書":
+        return isinstance(v, dict)
+    if t == "文字列または配列":
+        return isinstance(v, (str, list))
+    if t == "文字列・配列・辞書":
+        return isinstance(v, (str, list, dict))
+    if t == "数値または文字列":
+        return isinstance(v, str) or (isinstance(v, (int, float)) and not isinstance(v, bool))
+    raise RuntimeYuiError(f"builtin_types.json に未知の型名：{t}")
+
+
+def _check_arg_types(name: str, args: dict) -> None:
+    """渡された引数が型署名に合うか確かめる。
+
+    署名に無い助詞と、渡されなかった助詞は検査しない。主題ブロックで
+    暗黙に渡される値も助詞として現れないため対象外。
+    助詞の頭の * は必須の印で、渡されなければその時点でエラーにする。
+    """
+    sig = _ARG_TYPES.get(name)
+    if not sig:
+        return
+    for key, want in sig.items():
+        required = key.startswith("*")
+        particle = key[1:] if required else key
+        if particle not in args:
+            if required:
+                raise RuntimeYuiError(f"「{name}」には「{particle}」が必要です")
+            continue
+        v = args[particle]
+        if not _matches_type(v, want):
+            raise RuntimeYuiError(
+                f"「{name}」の「{particle}」は {want} である必要があります"
+                f"（{yui_type_name(v)} が渡されました）"
+            )
+
+
 def _invoke_builtin(name: str, args: dict, env: "Environment") -> Any:
     """組み込み関数を呼ぶ唯一の入口。
 
-    組み込みは Python の str / list / math などをそのまま使っているため、
-    想定外の型を渡されると TypeError や AttributeError がそのまま利用者まで
-    抜けてしまう。個々の組み込みに型検査を書き足すと 60 箇所へ同じコードを
-    複製することになり、必ず抜けが出る。ここ 1 箇所で受け止める。
+    やることは2つ。
+
+    1. builtin_types.json の型署名で引数を検査する。ここで弾いておかないと
+       2つの実装で結果が食い違う（JavaScript は型を選ばないため、Python が
+       エラーにする呼び出しが NaN や空配列になってしまう）。
+    2. それでも抜けた想定外の型を受け止める。組み込みは Python の
+       str / list / math をそのまま使っているので、TypeError や
+       AttributeError が利用者まで届いてしまう。個々の組み込みに検査を
+       書き足すと 60 箇所へ同じコードを複製することになり、必ず抜けが出る。
 
     制御フロー用のシグナルと Yui 自身のエラーはそのまま通す。
     """
+    _check_arg_types(name, args)
     try:
         return _BUILTINS[name](args, env)
     except (ReturnSignal, BreakSignal, ContinueSignal):
@@ -1613,7 +1678,9 @@ def _bi_append(args, env):
     if target is None:
         raise RuntimeYuiError("追加先がありません")
     if not isinstance(target, list):
-        raise RuntimeYuiError("「追加」の追加先は配列です")
+        raise RuntimeYuiError(
+            f"「追加」の追加先は 配列 である必要があります（{yui_type_name(target)} が渡されました）"
+        )
     target.append(item)
     return None
 
@@ -1625,7 +1692,9 @@ def _bi_append_tail(args, env):
     if target is None:
         raise RuntimeYuiError("追加先がありません")
     if not isinstance(target, list):
-        raise RuntimeYuiError("「末尾追加」の追加先は配列です")
+        raise RuntimeYuiError(
+            f"「末尾追加」の追加先は 配列 である必要があります（{yui_type_name(target)} が渡されました）"
+        )
     item = args.get("を")
     target.append(item)
     return None
@@ -2000,6 +2069,9 @@ def format_error(msg: str, source: str) -> str:
     line_text = lines[line_no-1]
     pad = " " * (len(str(line_no)) + 2)
     return f"{msg}\n{pad}{line_no} | {line_text}"
+
+_load_arg_types()
+
 
 def run(source: str, env: Optional[Environment] = None):
     tokens = tokenize(source)

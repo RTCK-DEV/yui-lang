@@ -893,9 +893,12 @@ function yuiTypeName(v) {
 /**
  * 組み込み関数を呼ぶ唯一の入口。yui.py の _invoke_builtin と対。
  *
- * 組み込みは JS の標準メソッドをそのまま使っているため、想定外の型を渡されると
- * TypeError などがそのまま利用者まで抜ける。個々の組み込みに型検査を書き足すと
- * 同じコードを 60 箇所へ複製することになるので、ここ 1 箇所で受け止める。
+ * やることは2つ。
+ * 1. builtin_types.json の型署名で引数を検査する。JavaScript は型を選ばないため、
+ *    ここで弾かないと Python 実装がエラーにする呼び出しが NaN や空配列になり、
+ *    2つの実装で結果が食い違う。
+ * 2. それでも抜けた想定外の型を受け止める。個々の組み込みに検査を書き足すと
+ *    同じコードを 60 箇所へ複製することになるので、ここ 1 箇所で受ける。
  * 制御フロー用のシグナルと Yui 自身のエラーはそのまま通す。
  */
 /** 整数または小数か。真偽値は数値として扱わない（SPEC 4 で独立した型）。 */
@@ -974,7 +977,55 @@ const BINOPS = {
   ">=": cmpOp(">=", (l, r) => l >= r),
 };
 
+/**
+ * 値が型名に合うか。型名は SPEC 4 の型システムに対応する。
+ * yui.py の _matches_type と対。
+ */
+function matchesType(v, t) {
+  switch (t) {
+    case "数値":               return typeof v === "number";
+    case "整数":               return Number.isInteger(v);
+    case "文字列":             return typeof v === "string";
+    case "配列":               return Array.isArray(v);
+    case "辞書":               return v !== null && typeof v === "object" && !Array.isArray(v);
+    case "文字列または配列":     return typeof v === "string" || Array.isArray(v);
+    case "文字列・配列・辞書":   return typeof v === "string" || (v !== null && typeof v === "object");
+    case "数値または文字列":     return typeof v === "number" || typeof v === "string";
+    default: throw new RuntimeYuiError(`builtin_types.json に未知の型名：${t}`);
+  }
+}
+
+/**
+ * 渡された引数が型署名に合うか確かめる。yui.py の _check_arg_types と対。
+ *
+ * 署名に無い助詞と、渡されなかった助詞は検査しない。主題ブロックで暗黙に
+ * 渡される値も助詞として現れないため対象外。
+ * 助詞の頭の * は必須の印で、渡されなければその時点でエラーにする。
+ *
+ * BUILTIN_ARG_TYPES は builtin_types.json の内容で、
+ * tools/build_html.py が生成ブロックへ埋め込む。
+ */
+function checkArgTypes(name, args) {
+  const sig = (typeof BUILTIN_ARG_TYPES !== "undefined" && BUILTIN_ARG_TYPES) ? BUILTIN_ARG_TYPES[name] : null;
+  if (!sig) return;
+  for (const [key, want] of Object.entries(sig)) {
+    const required = key.startsWith("*");
+    const particle = required ? key.slice(1) : key;
+    if (!(particle in args)) {
+      if (required) throw new RuntimeYuiError(`「${name}」には「${particle}」が必要です`);
+      continue;
+    }
+    const v = args[particle];
+    if (!matchesType(v, want)) {
+      throw new RuntimeYuiError(
+        `「${name}」の「${particle}」は ${want} である必要があります（${yuiTypeName(v)} が渡されました）`
+      );
+    }
+  }
+}
+
 function invokeBuiltin(name, args, env) {
+  checkArgTypes(name, args);
   try {
     return BUILTINS[name](args, env);
   } catch (e) {
@@ -1021,6 +1072,14 @@ function yuiToStr(v) {
   if (v === null || v === undefined) return "無";
   if (typeof v === "boolean") return v ? "真" : "偽";
   if (Array.isArray(v)) return "［" + v.map(yuiToStr).join(", ") + "］";
+  if (typeof v === "object") {
+    // 辞書。yui.py は Python の dict をそのまま str() するので表記を合わせる。
+    const inner = Object.entries(v)
+      .filter(([k]) => !k.startsWith("__"))
+      .map(([k, x]) => `'${k}': ${typeof x === "string" ? `'${x}'` : yuiToStr(x)}`)
+      .join(", ");
+    return "{" + inner + "}";
+  }
   return String(v);
 }
 
@@ -1232,6 +1291,8 @@ function _print(args, env) {
 function _length(args, env) {
   const v = args["を"] !== undefined ? args["を"] : env.getTopic();
   if (v === null || v === undefined) throw new RuntimeYuiError("長さを求める対象がありません");
+  // 辞書は length を持たないので鍵の数を返す（yui.py の len(dict) に合わせる）
+  if (typeof v === "object" && !Array.isArray(v)) return Object.keys(v).length;
   return v.length;
 }
 function _toStr(args)   { return yuiToStr(args["を"]); }
@@ -1247,7 +1308,7 @@ function _append(args, env) {
   const target = args["に"] !== undefined ? args["に"] : env.getTopic();
   const item = args["を"];
   if (target === null || target === undefined) throw new RuntimeYuiError("追加先がありません");
-  if (!Array.isArray(target)) throw new RuntimeYuiError("「追加」の追加先は配列です");
+  if (!Array.isArray(target)) throw new RuntimeYuiError(`「追加」の追加先は 配列 である必要があります（${yuiTypeName(target)} が渡されました）`);
   target.push(item);
   return null;
 }
@@ -1255,7 +1316,7 @@ function _appendTail(args, env) {
   let target = args["へ"];
   if (target === undefined) target = env.getTopic();
   if (target === null || target === undefined) throw new RuntimeYuiError("追加先がありません");
-  if (!Array.isArray(target)) throw new RuntimeYuiError("「末尾追加」の追加先は配列です");
+  if (!Array.isArray(target)) throw new RuntimeYuiError(`「末尾追加」の追加先は 配列 である必要があります（${yuiTypeName(target)} が渡されました）`);
   target.push(args["を"]);
   return null;
 }
@@ -1309,7 +1370,7 @@ const _filter = (a,e) => { const seq = a["から"] ?? e.getTopic(); return seq.f
 const _isInt  = (a,e) => Number.isInteger(a["を"] ?? e.getTopic());
 const _isStr  = (a,e) => typeof (a["を"] ?? e.getTopic()) === "string";
 const _isList = (a,e) => Array.isArray(a["を"] ?? e.getTopic());
-const _isDict = (a,e) => { const v = a["を"] ?? e.getTopic(); return v && typeof v === "object" && !Array.isArray(v); };
+const _isDict = (a,e) => { const v = a["を"] ?? e.getTopic(); return v !== null && v !== undefined && typeof v === "object" && !Array.isArray(v); };
 // 辞書
 const _keys   = (a,e) => Object.keys(a["を"] ?? e.getTopic());
 const _values = (a,e) => Object.values(a["を"] ?? e.getTopic());
@@ -1368,7 +1429,17 @@ const _toJson = (a,e) => {
     if (Array.isArray(x)) return x.map(clean);
     return x;
   };
-  return JSON.stringify(clean(a["を"] ?? e.getTopic()));
+  // 区切りの空白まで yui.py（Python の json.dumps 既定）に合わせる。
+  // JSON.stringify は空白を入れないため自前で組み立てる。
+  const dump = (x) => {
+    if (x === null || x === undefined) return "null";
+    if (typeof x === "boolean") return x ? "true" : "false";
+    if (typeof x === "number") return JSON.stringify(x);
+    if (typeof x === "string") return JSON.stringify(x);
+    if (Array.isArray(x)) return "[" + x.map(dump).join(", ") + "]";
+    return "{" + Object.entries(x).map(([k, v]) => JSON.stringify(k) + ": " + dump(v)).join(", ") + "}";
+  };
+  return dump(clean(a["を"] ?? e.getTopic()));
 };
 const _fromJson = (a,e) => JSON.parse(a["を"] ?? e.getTopic());
 // 日付

@@ -93,6 +93,7 @@ python3 yui.py
 | `yui.py` | Pythonリファレンス実装。Lexer / Parser / Tree-walking Evaluator。起動時に `stdlib.yui` を自動ロード |
 | `yui.js` | ブラウザ実装の本体。5つの HTML はこれを埋め込んで生成される |
 | `stdlib.yui` | 標準ライブラリ。Yui自身で書かれている |
+| `builtin_types.json` | 組み込み関数の引数型。2つの実装が共有する |
 | `SPEC.md` | 言語仕様書 v1.0。字句要素・BNF・設計判断記録まで |
 | `repl.html` | ブラウザ版REPL。単一HTMLファイルに `yui.js` と stdlib を埋め込み |
 | `drama.yui` | 劇作支援ライブラリ。ノベルゲーム・短編シナリオ・TRPG台本用の薄いDSL層 |
@@ -136,7 +137,7 @@ python3 yui.py
 - 漢数字単独は数値リテラルとして扱われる（変数名に使う場合は他の文字を含める）
 - ブラウザ版は `読み込む` が無効（同期ファイル取得不可のため）
 - ブラウザ版は整数と小数を型として区別しない（JavaScript の `Number` を使うため）。結果が整数値になる小数演算の表示が Python 実装と食い違う
-- 組み込み関数の引数型の検査が2つの実装で揃っていない。Python 実装は想定外の型を必ずエラーにするが、ブラウザ実装は素通しすることがある（`python3 tools/diff_impls.py` で差を測れる）
+- 2つの実装の差は整数と小数の区別に起因するものだけが残っている（組み込み 350 通り中 1 件、演算子 539 通り中 4 件。`python3 tools/diff_impls.py --all` で測れる）
 
 ---
 
@@ -163,13 +164,14 @@ node tests/js_test.mjs        # ブラウザ実装（Node だけで動く。ブ�
 |---|---|
 | `yui.js` | JavaScript 実装のインタプリタ本体 |
 | `stdlib.yui` | 標準ライブラリ（Python 実装と共有） |
+| `builtin_types.json` | 組み込み関数の引数型（Python 実装と共有） |
 
 ```bash
 python3 tools/build_html.py           # 5つの HTML を再生成
 python3 tools/build_html.py --check   # ずれていれば一覧を出して終了コード1
 ```
 
-各 HTML は生成ブロックの後ろに自分の UI と固有の組み込み関数を足す。たとえば `drama_player.html` は `表示` と `入力` を差し替え、劇用の関数を追加している。生成ブロックを直接編集しても次のビルドで上書きされるので、編集は `yui.js` か `stdlib.yui` に対して行う。走らせ忘れは両方のテストが検出する。
+各 HTML は生成ブロックの後ろに自分の UI と固有の組み込み関数を足す。たとえば `drama_player.html` は `表示` と `入力` を差し替え、劇用の関数を追加している。生成ブロックを直接編集しても次のビルドで上書きされるので、編集は `yui.js` / `stdlib.yui` / `builtin_types.json` に対して行う。走らせ忘れは両方のテストが検出する。
 
 ### 2つの実装の差を測る
 
@@ -190,6 +192,10 @@ node tools/browser_check.mjs --show   # 画面を出して実行
 ```
 
 WebLLM の CDN はスタブに差し替わり、各ページが期待する応答書式で返す。「LLM 出力 → 解析 → Yui コード生成 → インタプリタ実行 → 描画」の経路が、モデルのダウンロードもネットワークもなしで通る。Playwright を別途入れる必要があるため、依存なしで走る `tests/` には含めていない。
+
+### 自動テストで届かない範囲
+
+スタブは常に書式の整った応答を返すため、実際の LLM が応答を崩したときの復旧経路は通っていない。そこを含め、目視や実機でしか確認できない事項は [docs/manual_check.md](./docs/manual_check.md) にまとめてある。
 
 ---
 

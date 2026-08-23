@@ -8,14 +8,16 @@
 実際、この仕組みを入れるまでインタプリタは5箇所に複製されており、
 修正が repl.html にしか入っていない状態になっていた。
 
-原本は次の2つだけ:
-    yui.js      … JavaScript 実装のインタプリタ本体
-    stdlib.yui  … 標準ライブラリ（Python 実装と共有）
+原本は次の3つだけ:
+    yui.js             … JavaScript 実装のインタプリタ本体
+    stdlib.yui         … 標準ライブラリ（Python 実装と共有）
+    builtin_types.json … 組み込み関数の引数型（Python 実装と共有）
 
 各 HTML の <script> は次の構造になる:
 
     YUI:BEGIN マーカー
       yui.js の内容
+      const BUILTIN_ARG_TYPES = { builtin_types.json の内容 };
       const STDLIB_SRC = `stdlib.yui の内容`;
     YUI:END マーカー
       （ここから下は各 HTML 固有の UI と組み込み関数の追加）
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import re
 import sys
 from pathlib import Path
@@ -37,6 +40,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CORE = ROOT / "yui.js"
 STDLIB = ROOT / "stdlib.yui"
+ARG_TYPES = ROOT / "builtin_types.json"
 TARGETS = [
     "repl.html",
     "drama_player.html",
@@ -45,7 +49,7 @@ TARGETS = [
     "ai_branch.html",
 ]
 
-BEGIN = "/* ── YUI:BEGIN ── tools/build_html.py が yui.js と stdlib.yui から生成する。直接編集しないこと ── */"
+BEGIN = "/* ── YUI:BEGIN ── tools/build_html.py が yui.js / stdlib.yui / builtin_types.json から生成する。直接編集しないこと ── */"
 END = "/* ── YUI:END ── */"
 
 
@@ -61,7 +65,13 @@ def escape_for_template_literal(src: str) -> str:
 def render_block() -> str:
     core = io.open(CORE, encoding="utf-8").read().rstrip("\n")
     stdlib = escape_for_template_literal(io.open(STDLIB, encoding="utf-8").read().rstrip("\n"))
-    return f"{BEGIN}\n{core}\n\nconst STDLIB_SRC = `{stdlib}\n`;\n{END}"
+    # 説明用のキー（_ で始まる）は実行時に不要なので落とす
+    raw = json.load(io.open(ARG_TYPES, encoding="utf-8"))
+    sigs = {k: v for k, v in raw.items() if not k.startswith("_")}
+    types = json.dumps(sigs, ensure_ascii=False, indent=2)
+    return (f"{BEGIN}\n{core}\n\n"
+            f"const BUILTIN_ARG_TYPES = {types};\n\n"
+            f"const STDLIB_SRC = `{stdlib}\n`;\n{END}")
 
 
 def locate_block(script: str, path: Path) -> tuple[int, int]:
@@ -114,13 +124,16 @@ def process(path: Path, block: str, check_only: bool) -> bool:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="yui.js と stdlib.yui を各 HTML へ埋め込む")
+    ap = argparse.ArgumentParser(description="yui.js / stdlib.yui / builtin_types.json を各 HTML へ埋め込む")
     ap.add_argument("--check", action="store_true",
                     help="書き換えず、ずれていれば一覧を出して終了コード1")
     args = ap.parse_args()
 
     block = render_block()
     stale = []
+    for src in (CORE, STDLIB, ARG_TYPES):
+        if not src.exists():
+            raise SystemExit(f"エラー：原本 {src.name} が見つかりません")
     for name in TARGETS:
         path = ROOT / name
         if not path.exists():
@@ -129,10 +142,10 @@ def main() -> int:
             stale.append(name)
 
     if not stale:
-        print(f"同期済み：{len(TARGETS)} 個の HTML は yui.js / stdlib.yui と一致しています")
+        print(f"同期済み：{len(TARGETS)} 個の HTML は yui.js / stdlib.yui / builtin_types.json と一致しています")
         return 0
     if args.check:
-        print("同期ずれ：次の HTML が yui.js / stdlib.yui と一致しません", file=sys.stderr)
+        print("同期ずれ：次の HTML が原本と一致しません", file=sys.stderr)
         for n in stale:
             print(f"  {n}", file=sys.stderr)
         print("\n`python3 tools/build_html.py` を実行して再生成してください", file=sys.stderr)

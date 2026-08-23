@@ -76,11 +76,14 @@ function escapeForTemplateLiteral(s) {
   return s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
 }
 
-/** yui.js と stdlib.yui からインタプリタを組み立てて読み込む。 */
+/** yui.js / stdlib.yui / builtin_types.json からインタプリタを組み立てて読み込む。 */
 function loadInterpreter() {
   const core = fs.readFileSync(path.join(ROOT, 'yui.js'), 'utf8');
   const stdlib = escapeForTemplateLiteral(fs.readFileSync(path.join(ROOT, 'stdlib.yui'), 'utf8').replace(/\n+$/, ''));
-  const src = `${core}\nconst STDLIB_SRC = \`${stdlib}\n\`;\n;globalThis.__STDLIB_SRC = STDLIB_SRC;`;
+  const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'builtin_types.json'), 'utf8'));
+  const sigs = Object.fromEntries(Object.entries(raw).filter(([k]) => !k.startsWith('_')));
+  const src = `${core}\nconst BUILTIN_ARG_TYPES = ${JSON.stringify(sigs)};\n`
+    + `const STDLIB_SRC = \`${stdlib}\n\`;\n;globalThis.__STDLIB_SRC = STDLIB_SRC;`;
   const ctx = makeContext();
   vm.runInContext(src, ctx, { filename: 'yui.js' });
   if (typeof ctx.runYui !== 'function') throw new Error('yui.js が runYui を定義していません');
