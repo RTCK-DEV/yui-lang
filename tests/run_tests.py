@@ -7,9 +7,10 @@
     python3 tests/run_tests.py
 
 実行する内容:
-  1. ビルド同期チェック  repl.html の埋め込み stdlib が stdlib.yui と一致するか
+  1. ビルド同期チェック  5つの HTML の埋め込みが yui.js / stdlib.yui と一致するか
   2. 言語ケース          tests/cases.json を Python 実装で実行し期待値と照合
   3. サンプル            samples/*.yui が例外なく完走するか
+  4. 組み込みの不変条件  どの組み込みも Python の例外を素通しさせないこと
 
 tests/cases.json の各ケース:
   name           ケース名
@@ -76,14 +77,14 @@ def judge(case: dict, out: str, err: str | None) -> tuple[bool, str]:
 
 def check_build_sync() -> bool:
     print("── 1. ビルド同期チェック ──")
-    script = ROOT / "tools" / "build_repl.py"
+    script = ROOT / "tools" / "build_html.py"
     if not script.exists():
-        print(f"{NG} tools/build_repl.py が見つかりません")
+        print(f"{NG} tools/build_html.py が見つかりません")
         return False
     r = subprocess.run([sys.executable, str(script), "--check"],
                        capture_output=True, text=True)
     if r.returncode == 0:
-        print(f"{OK} repl.html の埋め込み stdlib は stdlib.yui と同期しています")
+        print(f"{OK} 5つの HTML は yui.js / stdlib.yui と同期しています")
         return True
     print(f"{NG} 同期ずれを検出しました")
     for line in (r.stdout + r.stderr).splitlines():
@@ -138,6 +139,48 @@ def run_samples() -> tuple[int, int]:
     return passed, failed
 
 
+def check_builtin_errors() -> int:
+    """どの組み込みに何を渡しても Yui のエラーになることを確かめる。
+
+    組み込みは Python の str / list / math をそのまま使っているため、
+    型検査を怠ると TypeError や AttributeError が利用者まで抜ける。
+    実際に 60 個中 41 個がそうなっていた。個別に直すのではなく
+    _invoke_builtin 1 箇所で受け止める設計にしたので、その不変条件を
+    総当たりで確かめる。ここが破れたら受け止め漏れがあるということ。
+    """
+    print("\n── 4. 組み込みの不変条件（Python 実装）──")
+    values = {"整数": 5, "小数": 1.5, "文字列": "abc", "真偽": True,
+              "無": None, "配列": [1, 2, 3], "辞書": {"k": 1}}
+    combos = [("を",), ("を", "に"), ("を", "で"), ("から", "を"),
+              ("を", "と"), ("へ", "を"), ("を", "まで")]
+    # 副作用があるもの・入力を待つものは対象外
+    skip = {"入力", "読み込む"}
+    leaks: dict[str, set[str]] = {}
+    checked = 0
+    for name in sorted(yui._BUILTINS):
+        if name in skip:
+            continue
+        for v in values.values():
+            for combo in combos:
+                checked += 1
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        yui._invoke_builtin(name, {p: v for p in combo}, yui.Environment())
+                except (yui.RuntimeYuiError, yui.LexError, yui.ParseError):
+                    pass
+                except (yui.ReturnSignal, yui.BreakSignal, yui.ContinueSignal):
+                    pass
+                except Exception as e:
+                    leaks.setdefault(name, set()).add(type(e).__name__)
+    if not leaks:
+        print(f"{OK} {checked} 通りを試して、Yui 以外の例外は 1 件も漏れませんでした")
+        return 0
+    for name, kinds in sorted(leaks.items()):
+        print(f"{NG} {name} が {'、'.join(sorted(kinds))} を素通しさせています")
+    print(f"  {len(leaks)} 個の組み込みで例外が漏れています（全 {checked} 通り中）")
+    return len(leaks)
+
+
 def main() -> int:
     cases = json.load(io.open(ROOT / "tests" / "cases.json", encoding="utf-8"))
     print(f"結（Yui）テスト — Python {sys.version.split()[0]}\n")
@@ -145,6 +188,7 @@ def main() -> int:
     sync_ok = check_build_sync()
     _, case_failed, known = run_cases(cases)
     _, sample_failed = run_samples()
+    leak_failed = check_builtin_errors()
 
     if known:
         print("\n── 既知の未解決 ──")
@@ -153,7 +197,7 @@ def main() -> int:
         for k in known:
             print(f"{KN} {k}")
 
-    total_failed = case_failed + sample_failed + (0 if sync_ok else 1)
+    total_failed = case_failed + sample_failed + leak_failed + (0 if sync_ok else 1)
     print()
     if total_failed:
         print(f"失敗：{total_failed} 件")

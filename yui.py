@@ -232,6 +232,20 @@ def tokenize(source: str) -> list[Token]:
             i += 1
             continue
 
+        # 助詞を含む組み込み関数名（「文字列にする」など）は分割せず1識別子にする。
+        # 直後が識別子文字なら別の名前なので対象外（「整数にする2」など）。
+        composite = None
+        for cname in _composite_builtin_names():
+            if src.startswith(cname, i):
+                j = i + len(cname)
+                if j >= n or not _IDENT_CHAR.match(src[j]):
+                    composite = cname
+                    break
+        if composite:
+            emit("IDENT", composite)
+            i += len(composite)
+            continue
+
         # 助詞・キーワードの最長マッチを試す
         kp = _match_kw_or_particle(src, i)
         if kp:
@@ -270,6 +284,29 @@ def _match_kw_or_particle(src: str, i: int) -> Optional[str]:
 
 def _starts_with_kw_or_particle(src: str, i: int) -> bool:
     return _match_kw_or_particle(src, i) is not None
+
+
+_COMPOSITE_BUILTINS: Optional[list[str]] = None
+
+def _composite_builtin_names() -> list[str]:
+    """助詞を含む組み込み関数名の一覧を長い順で返す。
+
+    「文字列にする」のような名前は助詞「に」の位置で識別子が切れてしまい、
+    そのままでは呼び出せない（「文字列」「に」「する」の3トークンになる）。
+    字句解析の時点でこれらを1つの識別子として切り出すことで、通常の呼び出し・
+    「の」後置記法・高階関数への文字列渡しのすべてで到達できるようにする。
+
+    一覧は _BUILTINS から導出するので、あとから助詞入りの組み込みが増えても
+    自動で追随する。tokenize から呼ばれる時点では _BUILTINS は定義済み。
+    """
+    global _COMPOSITE_BUILTINS
+    if _COMPOSITE_BUILTINS is None:
+        names = [
+            name for name in _BUILTINS
+            if any(_match_kw_or_particle(name, k) for k in range(1, len(name)))
+        ]
+        _COMPOSITE_BUILTINS = sorted(names, key=len, reverse=True)
+    return _COMPOSITE_BUILTINS
 
 
 # =============================================================================
@@ -1060,32 +1097,116 @@ def yui_type_name(v: Any) -> str:
     return type(v).__name__
 
 
+def _is_num(v: Any) -> bool:
+    """整数または小数か。真偽値は数値として扱わない（SPEC 4 で独立した型）。"""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _binop_error(op: str, l: Any, r: Any) -> "RuntimeYuiError":
+    return RuntimeYuiError(
+        f"「{op}」は {yui_type_name(l)} と {yui_type_name(r)} には使えません"
+    )
+
+
+# ── 二項演算子の型規則（SPEC 3.6 に対応）─────────────────────
+#
+#   +           数値＋数値／文字列＋文字列／配列＋配列
+#   - / %       数値どうしのみ
+#   *           数値どうし、または 文字列×整数・配列×整数（繰り返し）
+#   < > <= >=   数値どうし、または 文字列どうし
+#   == !=       型を問わない（型が違えば不一致）
+#
+# 真偽値は算術・大小比較のいずれにも使えない。Python では bool が int の
+# 派生なので「真 + 1」が 2 になってしまうが、SPEC 4 は 真偽 を整数とは別の
+# 型として宣言しているため、宣言に合わせて明示的に弾く。
+
+def _add(l: Any, r: Any) -> Any:
+    if _is_num(l) and _is_num(r): return l + r
+    if isinstance(l, str) and isinstance(r, str): return l + r
+    if isinstance(l, list) and isinstance(r, list): return l + r
+    raise _binop_error("+", l, r)
+
+
+def _sub(l: Any, r: Any) -> Any:
+    if _is_num(l) and _is_num(r): return l - r
+    raise _binop_error("-", l, r)
+
+
+def _mul(l: Any, r: Any) -> Any:
+    if _is_num(l) and _is_num(r): return l * r
+    # 文字列・配列の繰り返し。回数は整数のみ（小数回は意味を持たない）。
+    if isinstance(l, (str, list)) and isinstance(r, int) and not isinstance(r, bool):
+        return l * r
+    if isinstance(r, (str, list)) and isinstance(l, int) and not isinstance(l, bool):
+        return r * l
+    raise _binop_error("*", l, r)
+
+
 def _div(l: Any, r: Any) -> Any:
     """整数どうしで割り切れる場合だけ整数を返す。それ以外は小数。"""
-    if isinstance(l, int) and isinstance(r, int) and r != 0 and l % r == 0:
+    if not (_is_num(l) and _is_num(r)): raise _binop_error("/", l, r)
+    if r == 0: raise RuntimeYuiError("0で割ることはできません")
+    if isinstance(l, int) and isinstance(r, int) and l % r == 0:
         return l // r
     return l / r
 
 
-# 二項演算子の実体。TypeError / ZeroDivisionError は呼び出し側で
-# RuntimeYuiError に変換する（Python の例外をそのまま利用者に見せない）。
+def _mod(l: Any, r: Any) -> Any:
+    if not (_is_num(l) and _is_num(r)): raise _binop_error("%", l, r)
+    if r == 0: raise RuntimeYuiError("0で割ることはできません")
+    return l % r
+
+
+def _cmp(op: str, fn: Callable[[Any, Any], bool]) -> Callable[[Any, Any], bool]:
+    def run(l: Any, r: Any) -> bool:
+        if (_is_num(l) and _is_num(r)) or (isinstance(l, str) and isinstance(r, str)):
+            return fn(l, r)
+        raise _binop_error(op, l, r)
+    return run
+
+
 _BINOPS = {
-    "+":  lambda l, r: l + r,
-    "-":  lambda l, r: l - r,
-    "*":  lambda l, r: l * r,
+    "+":  _add,
+    "-":  _sub,
+    "*":  _mul,
     "/":  _div,
-    "%":  lambda l, r: l % r,
+    "%":  _mod,
     "==": lambda l, r: l == r,
     "!=": lambda l, r: l != r,
-    "<":  lambda l, r: l < r,
-    ">":  lambda l, r: l > r,
-    "<=": lambda l, r: l <= r,
-    ">=": lambda l, r: l >= r,
+    "<":  _cmp("<",  lambda l, r: l < r),
+    ">":  _cmp(">",  lambda l, r: l > r),
+    "<=": _cmp("<=", lambda l, r: l <= r),
+    ">=": _cmp(">=", lambda l, r: l >= r),
 }
 class ReturnSignal(Exception):
     def __init__(self, value): self.value = value
 class BreakSignal(Exception): pass
 class ContinueSignal(Exception): pass
+
+
+def _invoke_builtin(name: str, args: dict, env: "Environment") -> Any:
+    """組み込み関数を呼ぶ唯一の入口。
+
+    組み込みは Python の str / list / math などをそのまま使っているため、
+    想定外の型を渡されると TypeError や AttributeError がそのまま利用者まで
+    抜けてしまう。個々の組み込みに型検査を書き足すと 60 箇所へ同じコードを
+    複製することになり、必ず抜けが出る。ここ 1 箇所で受け止める。
+
+    制御フロー用のシグナルと Yui 自身のエラーはそのまま通す。
+    """
+    try:
+        return _BUILTINS[name](args, env)
+    except (ReturnSignal, BreakSignal, ContinueSignal):
+        raise
+    except (RuntimeYuiError, LexError, ParseError):
+        raise
+    except RecursionError:
+        raise RuntimeYuiError("再帰が深すぎます") from None
+    except Exception as e:
+        got = "／".join(f"{p}：{yui_type_name(v)}" for p, v in args.items()) or "引数なし"
+        raise RuntimeYuiError(
+            f"「{name}」は与えられた引数では実行できません（{got}）"
+        ) from None
 
 
 def _interpolate(text: str, env: "Environment") -> str:
@@ -1301,7 +1422,7 @@ class Evaluator:
                 topic = env.get_topic()
                 if topic is not None:
                     args["を"] = topic
-                return _BUILTINS[node.name](args, env)
+                return _invoke_builtin(node.name, args, env)
             raise RuntimeYuiError(f"未定義の名前：{node.name}")
 
         if isinstance(node, BinOp):
@@ -1324,12 +1445,9 @@ class Evaluator:
         if isinstance(node, UnaryOp):
             v = Evaluator.eval_node(node.operand, env)
             if node.op == "neg":
-                try:
-                    return -v
-                except TypeError:
-                    raise RuntimeYuiError(
-                        f"符号反転は {yui_type_name(v)} には使えません"
-                    ) from None
+                if not _is_num(v):
+                    raise RuntimeYuiError(f"符号反転は {yui_type_name(v)} には使えません")
+                return -v
             if node.op == "not": return not bool(v)
 
         if isinstance(node, Assign):
@@ -1432,7 +1550,7 @@ class Evaluator:
             ba = _alias_no_to_wo(args)
             if topic is not None and "を" not in ba and verb in _TOPIC_VERBS:
                 ba["を"] = topic
-            return _BUILTINS[verb](ba, env)
+            return _invoke_builtin(verb, ba, env)
 
         # 2. ユーザー定義関数：仮引数の助詞に「の」がなければ「を」にエイリアス、あればそのまま
         if env.has(verb):
@@ -1693,7 +1811,7 @@ def _bi_map(args, env):
     seq = args.get("に", args.get("の", env.get_topic()))
     f = args["を"]  # 関数または文字列名
     if isinstance(f, str):
-        if f in _BUILTINS: f_call = lambda x: _BUILTINS[f]({"を": x}, env)
+        if f in _BUILTINS: f_call = lambda x: _invoke_builtin(f, {"を": x}, env)
         else: f_call = lambda x: env.get(f).call({"を": x})
     elif isinstance(f, Function):
         # 引数の助詞は「を」想定
@@ -1707,7 +1825,7 @@ def _bi_filter(args, env):
     seq = args.get("から", env.get_topic())
     f = args["を"]
     if isinstance(f, str):
-        if f in _BUILTINS: f_call = lambda x: _BUILTINS[f]({"を": x}, env)
+        if f in _BUILTINS: f_call = lambda x: _invoke_builtin(f, {"を": x}, env)
         else: f_call = lambda x: env.get(f).call({"を": x})
     elif isinstance(f, Function):
         f_call = lambda x: f.call({"を": x})

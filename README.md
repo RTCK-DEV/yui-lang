@@ -91,16 +91,18 @@ python3 yui.py
 | パス | 内容 |
 |---|---|
 | `yui.py` | Pythonリファレンス実装。Lexer / Parser / Tree-walking Evaluator。起動時に `stdlib.yui` を自動ロード |
+| `yui.js` | ブラウザ実装の本体。5つの HTML はこれを埋め込んで生成される |
 | `stdlib.yui` | 標準ライブラリ。Yui自身で書かれている |
 | `SPEC.md` | 言語仕様書 v1.0。字句要素・BNF・設計判断記録まで |
-| `repl.html` | ブラウザ版REPL。単一HTMLファイルにJS実装とstdlibを埋め込み |
+| `repl.html` | ブラウザ版REPL。単一HTMLファイルに `yui.js` と stdlib を埋め込み |
 | `drama.yui` | 劇作支援ライブラリ。ノベルゲーム・短編シナリオ・TRPG台本用の薄いDSL層 |
 | `drama_player.html` | `drama.yui` で書かれたシナリオのブラウザプレイヤー |
 | `ai_player.html` | WebLLM（Gemma-2-2b-it）をブラウザ内で動かし、キャラクターと対話する実験 |
 | `ai_dialog.html` | 複数のAIキャラクター同士を会話させるマルチエージェント実験 |
 | `ai_branch.html` | AI生成による分岐ツリーの可視化実験 |
 | `samples/` | サンプル21本 |
-| `tools/build_repl.py` | `stdlib.yui` を `repl.html` へ埋め込むビルドスクリプト |
+| `tools/build_html.py` | `yui.js` と `stdlib.yui` を5つの HTML へ埋め込むビルドスクリプト |
+| `tools/diff_impls.py` | 2つの実装の挙動差を測る調査用ツール |
 | `tests/` | テスト。`cases.json` を2つの実装が共有する |
 
 `ai_*.html` は [WebLLM](https://github.com/mlc-ai/web-llm) を使うため **WebGPU対応ブラウザ** が必要。初回はモデル（約1.5GB）のダウンロードが走る。
@@ -131,8 +133,7 @@ python3 yui.py
 - 漢数字単独は数値リテラルとして扱われる（変数名に使う場合は他の文字を含める）
 - ブラウザ版は `読み込む` が無効（同期ファイル取得不可のため）
 - ブラウザ版は整数と小数を型として区別しない（JavaScript の `Number` を使うため）。結果が整数値になる小数演算の表示が Python 実装と食い違う
-- 組み込みの `文字列にする` / `整数にする` / `小数にする` は名前に助詞「に」を含むため直接呼び出せない（未修正）。高階関数経由なら到達できる
-- 混合型の演算（`「42」 + 0` など）の意味は未規定で、2つの実装で結果が食い違う
+- 組み込み関数の引数型の検査が2つの実装で揃っていない。Python 実装は想定外の型を必ずエラーにするが、ブラウザ実装は素通しすることがある（`python3 tools/diff_impls.py` で差を測れる）
 
 ---
 
@@ -149,16 +150,31 @@ node tests/js_test.mjs        # ブラウザ実装（Node だけで動く。ブ�
 
 テストケースは `tests/cases.json` に置いてあり、2つの実装が同じファイルを読む。未解決の不具合は `known_failure` を付けたまま残してあり、終了コードには影響しないが実行のたびに一覧表示される。
 
-### stdlib のビルド
+### HTML のビルド
 
-`repl.html` は単一HTMLで完結させるため、`stdlib.yui` の内容を JS のテンプレートリテラルとして埋め込んでいる。真実は `stdlib.yui` 側だけに置き、埋め込みブロックは生成する。
+ブラウザ向けの5つの HTML（`repl.html` / `drama_player.html` / `ai_player.html` / `ai_dialog.html` / `ai_branch.html`）は、いずれも単体で開けば動くことを狙っている。そのため外部ファイルを読み込めず、JavaScript 実装と標準ライブラリを本文へ直接埋め込む必要がある。
+
+原本は2つだけで、5つの HTML の埋め込みブロックはそこから生成する。
+
+| 原本 | 内容 |
+|---|---|
+| `yui.js` | JavaScript 実装のインタプリタ本体 |
+| `stdlib.yui` | 標準ライブラリ（Python 実装と共有） |
 
 ```bash
-python3 tools/build_repl.py           # stdlib.yui から repl.html の該当ブロックを再生成
-python3 tools/build_repl.py --check   # 同期していなければ差分を出して終了コード1
+python3 tools/build_html.py           # 5つの HTML を再生成
+python3 tools/build_html.py --check   # ずれていれば一覧を出して終了コード1
 ```
 
-`stdlib.yui` を編集したらビルドを走らせること。走らせ忘れは両方のテストが検出する。
+各 HTML は生成ブロックの後ろに自分の UI と固有の組み込み関数を足す。たとえば `drama_player.html` は `表示` と `入力` を差し替え、劇用の関数を追加している。生成ブロックを直接編集しても次のビルドで上書きされるので、編集は `yui.js` か `stdlib.yui` に対して行う。走らせ忘れは両方のテストが検出する。
+
+### 2つの実装の差を測る
+
+`yui.py` と `yui.js` は同じ言語仕様を別々に実装しているため、放っておくとずれる。
+
+```bash
+python3 tools/diff_impls.py --all     # 組み込み関数 × 引数型、演算子 × 型 を総当たりで比較
+```
 
 ---
 

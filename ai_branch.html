@@ -172,7 +172,25 @@
   </div>
 </div>
 
-<script type="module">
+<script type="module">/* ── YUI:BEGIN ── tools/build_html.py が yui.js と stdlib.yui から生成する。直接編集しないこと ── */
+/* ============================================================
+ * 結（Yui）言語 — ブラウザ実装（インタプリタ本体）
+ *
+ * このファイルが JavaScript 実装の唯一の原本。
+ * repl.html / drama_player.html / ai_player.html / ai_dialog.html /
+ * ai_branch.html の5つは、tools/build_html.py がこの内容と stdlib.yui を
+ * 各 HTML へ埋め込んで生成する。HTML 側の埋め込みブロックを直接編集しても
+ * 次のビルドで上書きされる。編集はここに対して行うこと。
+ *
+ * 各 HTML はこのコアの「後ろ」に自分の UI と固有の組み込み関数を足す。
+ * 例：drama_player.html は 表示 / 入力 を差し替え、劇用の関数を追加する。
+ *
+ * Python リファレンス実装は ../yui.py。両者の挙動差は
+ * tools/diff_impls.py で測れる。
+ *
+ * 著作権表記：RTCK
+ * ============================================================ */
+
 "use strict";
 /* ============================================================
  * 結（Yui）言語 — JavaScript実装（Python版と同等）
@@ -241,6 +259,30 @@ function matchKwOrParticle(src, i) {
     if (src.startsWith(w, i)) return w;
   }
   return null;
+}
+
+/**
+ * 助詞を含む組み込み関数名の一覧を長い順で返す。yui.py の
+ * _composite_builtin_names と対。
+ *
+ * 「文字列にする」のような名前は助詞「に」の位置で識別子が切れてしまい、
+ * そのままでは呼び出せない（「文字列」「に」「する」の3トークンになる）。
+ * 字句解析の時点で1つの識別子として切り出すことで、通常の呼び出し・
+ * 「の」後置記法・高階関数への文字列渡しのすべてで到達できるようにする。
+ *
+ * 一覧は BUILTINS から導出するので、助詞入りの組み込みが増えても追随する。
+ */
+let _compositeBuiltins = null;
+function compositeBuiltinNames() {
+  if (_compositeBuiltins === null) {
+    _compositeBuiltins = Object.keys(BUILTINS)
+      .filter(name => {
+        for (let k = 1; k < name.length; k++) if (matchKwOrParticle(name, k)) return true;
+        return false;
+      })
+      .sort((a, b) => b.length - a.length);
+  }
+  return _compositeBuiltins;
 }
 
 class LexError extends Error {}
@@ -339,6 +381,17 @@ function tokenize(src) {
     if ("+-*/%=()[]{}:,.<>".includes(nc)) {
       emit("SYM", nc); i++; continue;
     }
+
+    // 助詞を含む組み込み関数名（「文字列にする」など）は分割せず1識別子にする。
+    // 直後が識別子文字なら別の名前なので対象外（「整数にする2」など）。
+    let composite = null;
+    for (const cname of compositeBuiltinNames()) {
+      if (src.startsWith(cname, i)) {
+        const j = i + cname.length;
+        if (j >= n || !RE_IDENT_CHAR.test(src[j])) { composite = cname; break; }
+      }
+    }
+    if (composite) { emit("IDENT", composite); i += composite.length; continue; }
 
     const kp = matchKwOrParticle(src, i);
     if (kp) {
@@ -682,8 +735,18 @@ class Parser {
   }
 
   parseExprFrom(toks) {
-    const sub = new Parser([...toks, {kind:"NEWLINE",value:"\n",line:0}, {kind:"EOF",value:null,line:0}]);
-    return sub.parseCallOrExpr();
+    // yui.py の _parse_expr_from と同じ順序：まず式として解析し、
+    // トークンが余った場合にかぎり「項助詞…動詞」の呼び出しとして解釈し直す。
+    // 呼び出しを先に試すと「i が B 以下」の tail が [B, 以下] になり、
+    // 単独比較語ガードをすり抜けて関数「B以下」の呼び出しになってしまう。
+    const pad = () => [{kind:"NEWLINE",value:"\n",line:0}, {kind:"EOF",value:null,line:0}];
+    const sub = new Parser([...toks, ...pad()]);
+    const node = sub.parseExpr();
+    if (!(sub.check("NEWLINE") || sub.check("EOF"))) {
+      const sub2 = new Parser([...toks, ...pad()]);
+      return sub2.parseCallOrExpr();
+    }
+    return node;
   }
 
   parseCallFrom(toks, isCmd) {
@@ -990,6 +1053,113 @@ class YuiFunction {
 class ReturnSignal { constructor(v) { this.value = v; } }
 class BreakSignal {}
 class ContinueSignal {}
+
+/** 値の型を Yui の用語で返す。エラーメッセージ用。yui.py の yui_type_name と対。 */
+function yuiTypeName(v) {
+  if (v === null || v === undefined) return "無";
+  if (typeof v === "boolean") return "真偽";
+  if (typeof v === "number") return Number.isInteger(v) ? "整数" : "小数";
+  if (typeof v === "string") return "文字列";
+  if (Array.isArray(v)) return "配列";
+  if (typeof v === "object") return "辞書";
+  return typeof v;
+}
+
+/**
+ * 組み込み関数を呼ぶ唯一の入口。yui.py の _invoke_builtin と対。
+ *
+ * 組み込みは JS の標準メソッドをそのまま使っているため、想定外の型を渡されると
+ * TypeError などがそのまま利用者まで抜ける。個々の組み込みに型検査を書き足すと
+ * 同じコードを 60 箇所へ複製することになるので、ここ 1 箇所で受け止める。
+ * 制御フロー用のシグナルと Yui 自身のエラーはそのまま通す。
+ */
+/** 整数または小数か。真偽値は数値として扱わない（SPEC 4 で独立した型）。 */
+function isNum(v) { return typeof v === "number"; }
+
+function binopError(op, l, r) {
+  return new RuntimeYuiError(`「${op}」は ${yuiTypeName(l)} と ${yuiTypeName(r)} には使えません`);
+}
+
+/** 値の等価判定。配列・辞書は中身で比べる（yui.py が Python の == を使うのに合わせる）。 */
+function yuiEquals(a, b) {
+  if (a === b) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((x, i) => yuiEquals(x, b[i]));
+  }
+  if (a && b && typeof a === "object" && typeof b === "object"
+      && !Array.isArray(a) && !Array.isArray(b)) {
+    const ka = Object.keys(a), kb = Object.keys(b);
+    return ka.length === kb.length && ka.every(k => k in b && yuiEquals(a[k], b[k]));
+  }
+  return false;
+}
+
+/*
+ * 二項演算子の型規則（SPEC 3.6 に対応。yui.py の _BINOPS と同じ規則）。
+ *
+ *   +           数値＋数値／文字列＋文字列／配列＋配列
+ *   - / %       数値どうしのみ
+ *   *           数値どうし、または 文字列×整数・配列×整数（繰り返し）
+ *   < > <= >=   数値どうし、または 文字列どうし
+ *   == !=       型を問わない（型が違えば不一致）
+ *
+ * 真偽値は算術・大小比較のいずれにも使えない。JavaScript は暗黙変換で
+ * 「"42" + 0」を "420" にしてしまうが、リファレンス実装（yui.py）に合わせて
+ * 明示的に弾く。
+ */
+function cmpOp(op, fn) {
+  return (l, r) => {
+    if ((isNum(l) && isNum(r)) || (typeof l === "string" && typeof r === "string")) return fn(l, r);
+    throw binopError(op, l, r);
+  };
+}
+
+function repeatOp(l, r) {
+  // 文字列・配列の繰り返し。回数は整数のみ（小数回は意味を持たない）。
+  const rep = (seq, k) => typeof seq === "string" ? seq.repeat(k) : Array.from({length: k}, () => seq).flat();
+  if ((typeof l === "string" || Array.isArray(l)) && Number.isInteger(r)) return rep(l, Math.max(0, r));
+  if ((typeof r === "string" || Array.isArray(r)) && Number.isInteger(l)) return rep(r, Math.max(0, l));
+  throw binopError("*", l, r);
+}
+
+const BINOPS = {
+  "+":  (l, r) => {
+    if (isNum(l) && isNum(r)) return l + r;
+    if (typeof l === "string" && typeof r === "string") return l + r;
+    if (Array.isArray(l) && Array.isArray(r)) return l.concat(r);
+    throw binopError("+", l, r);
+  },
+  "-":  (l, r) => { if (isNum(l) && isNum(r)) return l - r; throw binopError("-", l, r); },
+  "*":  (l, r) => (isNum(l) && isNum(r)) ? l * r : repeatOp(l, r),
+  "/":  (l, r) => {
+    if (!(isNum(l) && isNum(r))) throw binopError("/", l, r);
+    if (r === 0) throw new RuntimeYuiError("0で割ることはできません");
+    return l / r;
+  },
+  "%":  (l, r) => {
+    if (!(isNum(l) && isNum(r))) throw binopError("%", l, r);
+    if (r === 0) throw new RuntimeYuiError("0で割ることはできません");
+    return l % r;
+  },
+  "==": (l, r) => yuiEquals(l, r),
+  "!=": (l, r) => !yuiEquals(l, r),
+  "<":  cmpOp("<",  (l, r) => l < r),
+  ">":  cmpOp(">",  (l, r) => l > r),
+  "<=": cmpOp("<=", (l, r) => l <= r),
+  ">=": cmpOp(">=", (l, r) => l >= r),
+};
+
+function invokeBuiltin(name, args, env) {
+  try {
+    return BUILTINS[name](args, env);
+  } catch (e) {
+    if (e instanceof ReturnSignal || e instanceof BreakSignal || e instanceof ContinueSignal) throw e;
+    if (e instanceof RuntimeYuiError || e instanceof LexError || e instanceof ParseError) throw e;
+    if (e instanceof RangeError) throw new RuntimeYuiError("再帰が深すぎます");
+    const got = Object.entries(args).map(([p, v]) => `${p}：${yuiTypeName(v)}`).join("／") || "引数なし";
+    throw new RuntimeYuiError(`「${name}」は与えられた引数では実行できません（${got}）`);
+  }
+}
 class Race {
   constructor(name, attrs) { this.name = name; this.attrs = attrs; }
 }
@@ -1002,13 +1172,18 @@ function interpolate(text, env) {
       const j = text.indexOf("}", i);
       if (j === -1) throw new RuntimeYuiError("文字列補間：}が閉じていません");
       const exprSrc = text.slice(i+1, j);
+      let tree;
       try {
-        const tokens = tokenize(exprSrc);
-        const tree = new Parser(tokens).parseCallOrExpr();
-        out += yuiToStr(Evaluator.eval(tree, env));
+        // 補間式は parseExprFrom と同じ「式優先・余ったら呼び出し」順で解釈する。
+        // parseCallOrExpr を直に呼ぶと、比較の右辺が識別子のとき
+        // （『{x が B 以下}』）動詞句が「B以下」になってしまう。
+        const toks = tokenize(exprSrc).filter(t => t.kind !== "NEWLINE" && t.kind !== "EOF");
+        tree = new Parser(toks).parseExprFrom(toks);
       } catch (e) {
         throw new RuntimeYuiError(`補間式「${exprSrc}」の解析失敗：${e.message}`);
       }
+      // 評価は try の外。実行時エラーを「解析失敗」と誤ってラベルしないため。
+      out += yuiToStr(Evaluator.eval(tree, env));
       i = j + 1;
     } else if (c === "") { out += "{"; i++; }
     else if (c === "") { out += "}"; i++; }
@@ -1089,33 +1264,25 @@ const Evaluator = {
           const args = {};
           const topic = env.getTopic();
           if (topic !== null) args["を"] = topic;
-          return BUILTINS[node.name](args, env);
+          return invokeBuiltin(node.name, args, env);
         }
         throw new RuntimeYuiError(`未定義の名前：${node.name}`);
       }
       case "Bin": {
         const l = Evaluator.eval(node.left, env);
         const r = Evaluator.eval(node.right, env);
-        switch (node.op) {
-          case "+":  return (typeof l === "string" || typeof r === "string") ? String(l)+String(r) : l + r;
-          case "-":  return l - r;
-          case "*":  return l * r;
-          case "/":  return (Number.isInteger(l) && Number.isInteger(r) && r !== 0 && l % r === 0) ? l / r : l / r;
-          case "%":  return l % r;
-          case "==": return l === r;
-          case "!=": return l !== r;
-          case "<":  return l < r;
-          case ">":  return l > r;
-          case "<=": return l <= r;
-          case ">=": return l >= r;
-          case "and": return Boolean(l) && Boolean(r);
-          case "or":  return Boolean(l) || Boolean(r);
-        }
-        throw new RuntimeYuiError(`未対応の演算子：${node.op}`);
+        if (node.op === "and") return Boolean(l) && Boolean(r);
+        if (node.op === "or")  return Boolean(l) || Boolean(r);
+        const fn = BINOPS[node.op];
+        if (!fn) throw new RuntimeYuiError(`未対応の演算子：${node.op}`);
+        return fn(l, r);
       }
       case "Un": {
         const v = Evaluator.eval(node.operand, env);
-        if (node.op === "neg") return -v;
+        if (node.op === "neg") {
+          if (!isNum(v)) throw new RuntimeYuiError(`符号反転は ${yuiTypeName(v)} には使えません`);
+          return -v;
+        }
         if (node.op === "not") return !v;
         throw new RuntimeYuiError(`未対応の単項演算子：${node.op}`);
       }
@@ -1203,7 +1370,7 @@ const Evaluator = {
     if (verb in BUILTINS) {
       let ba = aliasNoToWo(args);
       if (topic !== null && !("を" in ba) && TOPIC_VERBS.has(verb)) ba["を"] = topic;
-      return BUILTINS[verb](ba, env);
+      return invokeBuiltin(verb, ba, env);
     }
     // 2. ユーザー定義関数
     if (env.has(verb)) {
@@ -1243,19 +1410,27 @@ function _length(args, env) {
   return v.length;
 }
 function _toStr(args)   { return yuiToStr(args["を"]); }
-function _toInt(args)   { return parseInt(args["を"], 10); }
-function _toFloat(args) { return parseFloat(args["を"]); }
+function _toNumber(args, parse, name) {
+  const v = parse(args["を"], 10);
+  // NaN を返さない。yui.py は int()/float() の ValueError で失敗するので合わせる。
+  if (Number.isNaN(v)) throw new RuntimeYuiError(`「${name}」は与えられた引数では実行できません（を：${yuiTypeName(args["を"])}）`);
+  return v;
+}
+function _toInt(args)   { return _toNumber(args, parseInt, "整数にする"); }
+function _toFloat(args) { return _toNumber(args, parseFloat, "小数にする"); }
 function _append(args, env) {
   const target = args["に"] !== undefined ? args["に"] : env.getTopic();
   const item = args["を"];
-  if (!Array.isArray(target)) throw new RuntimeYuiError("追加先は配列");
+  if (target === null || target === undefined) throw new RuntimeYuiError("追加先がありません");
+  if (!Array.isArray(target)) throw new RuntimeYuiError("「追加」の追加先は配列です");
   target.push(item);
   return null;
 }
 function _appendTail(args, env) {
   let target = args["へ"];
   if (target === undefined) target = env.getTopic();
-  if (!Array.isArray(target)) throw new RuntimeYuiError("「末尾へ」は配列に対して使います");
+  if (target === null || target === undefined) throw new RuntimeYuiError("追加先がありません");
+  if (!Array.isArray(target)) throw new RuntimeYuiError("「末尾追加」の追加先は配列です");
   target.push(args["を"]);
   return null;
 }
@@ -1297,7 +1472,7 @@ const _repeat  = (a)   => { const v = a["を"]; const n = parseInt(a["に"], 10)
 // 高階
 function _callFn(f, x, env) {
   if (typeof f === "string") {
-    if (f in BUILTINS) return BUILTINS[f]({"を": x}, env);
+    if (f in BUILTINS) return invokeBuiltin(f, {"を": x}, env);
     return env.get(f).call({"を": x});
   }
   if (f instanceof YuiFunction) return f.call({"を": x});
@@ -1485,7 +1660,6 @@ function dumpEnv(env) {
   return entries.length ? entries.join("\n") : "（変数なし）";
 }
 
-
 const STDLIB_SRC = `※ ════════════════════════════════════════════════════════════
 ※   結（Yui）標準ライブラリ stdlib.yui
 ※   著作権表記：RTCK
@@ -1655,6 +1829,7 @@ const STDLIB_SRC = `※ ══════════════════�
     戻り値：結果
 おわり
 `;
+/* ── YUI:END ── */
 const DRAMA_SRC = `※ ════════════════════════════════════════════════════════════
 ※   結（Yui）劇作支援ライブラリ drama.yui
 ※   著作権表記：RTCK
