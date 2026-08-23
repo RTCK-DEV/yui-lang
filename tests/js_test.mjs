@@ -81,7 +81,8 @@ function loadInterpreter() {
   const core = fs.readFileSync(path.join(ROOT, 'yui.js'), 'utf8');
   const stdlib = escapeForTemplateLiteral(fs.readFileSync(path.join(ROOT, 'stdlib.yui'), 'utf8').replace(/\n+$/, ''));
   const raw = JSON.parse(fs.readFileSync(path.join(ROOT, 'builtin_types.json'), 'utf8'));
-  const sigs = Object.fromEntries(Object.entries(raw).filter(([k]) => !k.startsWith('_')));
+  // 落とすのは説明文だけ。_主題の助詞 は実行時に使うので残す。
+  const sigs = Object.fromEntries(Object.entries(raw).filter(([k]) => k !== '_説明'));
   const src = `${core}\nconst BUILTIN_ARG_TYPES = ${JSON.stringify(sigs)};\n`
     + `const STDLIB_SRC = \`${stdlib}\n\`;\n;globalThis.__STDLIB_SRC = STDLIB_SRC;`;
   const ctx = makeContext();

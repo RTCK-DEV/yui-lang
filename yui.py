@@ -1086,6 +1086,20 @@ class Parser:
 class RuntimeYuiError(Exception): pass
 
 
+class _NoTopic:
+    """主題が設定されていないことを表す番兵。
+
+    None を「未設定」の印に使うと、主題そのものが 無 のときに区別できない。
+    実際、`無について ... おわり` の内側で「主題」を参照すると
+    「ブロックの外にいる」と誤判定されていた。
+    """
+    __slots__ = ()
+    def __repr__(self) -> str: return "<主題なし>"
+
+
+_NO_TOPIC = _NoTopic()
+
+
 def yui_type_name(v: Any) -> str:
     """値の型を Yui の用語で返す。エラーメッセージ用。"""
     if v is None: return "無"
@@ -1188,13 +1202,17 @@ class ContinueSignal(Exception): pass
 # 組み込み関数の引数型。builtin_types.json が唯一の原本で、
 # ブラウザ実装へは tools/build_html.py が同じ内容を埋め込む。
 _ARG_TYPES: dict[str, dict[str, str]] = {}
+# 主題ブロックで暗黙に渡される値がどの助詞の位置に入るか。既定は「を」。
+_TOPIC_PARTICLE: dict[str, str] = {}
 
 def _load_arg_types() -> None:
-    global _ARG_TYPES
+    global _ARG_TYPES, _TOPIC_PARTICLE
     import json as _json
     path = _os_path.join(_os_path.dirname(_os_path.abspath(__file__)), "builtin_types.json")
     with open(path, encoding="utf-8") as f:
-        _ARG_TYPES = {k: v for k, v in _json.load(f).items() if not k.startswith("_")}
+        data = _json.load(f)
+    _ARG_TYPES = {k: v for k, v in data.items() if not k.startswith("_")}
+    _TOPIC_PARTICLE = data.get("_主題の助詞", {})
 
 
 def _matches_type(v: Any, t: str) -> bool:
@@ -1213,32 +1231,44 @@ def _matches_type(v: Any, t: str) -> bool:
         return isinstance(v, (str, list))
     if t == "文字列・配列・辞書":
         return isinstance(v, (str, list, dict))
+    if t == "任意":
+        return True
     if t == "数値または文字列":
         return isinstance(v, str) or (isinstance(v, (int, float)) and not isinstance(v, bool))
     raise RuntimeYuiError(f"builtin_types.json に未知の型名：{t}")
 
 
-def _check_arg_types(name: str, args: dict) -> None:
+def _check_arg_types(name: str, args: dict, topic: tuple = (False, None)) -> None:
     """渡された引数が型署名に合うか確かめる。
 
-    署名に無い助詞と、渡されなかった助詞は検査しない。主題ブロックで
-    暗黙に渡される値も助詞として現れないため対象外。
-    助詞の頭の * は必須の印で、渡されなければその時点でエラーにする。
+    署名に無い助詞は検査しない。助詞の頭の * は必須の印で、渡されなければ
+    その時点でエラーにする。
+
+    主題ブロックの内側では助詞を書かずに呼べるため、その値も検査する。
+    主題がどの助詞の位置に入るかは builtin_types.json の _主題の助詞 で決まる
+    （既定は「を」）。ここを見ないと、助詞を書いた場合だけ型が守られ、
+    主題経由では素通りするという食い違いが残る。
     """
     sig = _ARG_TYPES.get(name)
     if not sig:
         return
+    topic_particle = _TOPIC_PARTICLE.get(name, "を")
+    has_topic, topic_value = topic
     for key, want in sig.items():
         required = key.startswith("*")
         particle = key[1:] if required else key
-        if particle not in args:
+        if particle in args:
+            v = args[particle]
+        elif has_topic and particle == topic_particle:
+            v = topic_value
+        else:
             if required:
                 raise RuntimeYuiError(f"「{name}」には「{particle}」が必要です")
             continue
-        v = args[particle]
         if not _matches_type(v, want):
+            where = f"の「{particle}」" if particle in args else "に渡された主題"
             raise RuntimeYuiError(
-                f"「{name}」の「{particle}」は {want} である必要があります"
+                f"「{name}」{where}は {want} である必要があります"
                 f"（{yui_type_name(v)} が渡されました）"
             )
 
@@ -1258,7 +1288,7 @@ def _invoke_builtin(name: str, args: dict, env: "Environment") -> Any:
 
     制御フロー用のシグナルと Yui 自身のエラーはそのまま通す。
     """
-    _check_arg_types(name, args)
+    _check_arg_types(name, args, (env.has_topic(), env.get_topic()))
     try:
         return _BUILTINS[name](args, env)
     except (ReturnSignal, BreakSignal, ContinueSignal):
@@ -1311,7 +1341,7 @@ class Environment:
         self.vars: dict[str, Any] = {}
         self.consts: set[str] = set()
         self.parent = parent
-        self.topic: Any = None  # 主題（〜について の対象）
+        self.topic: Any = _NO_TOPIC  # 主題（〜について の対象）。未設定は _NO_TOPIC
 
     def get(self, name: str) -> Any:
         if name in self.vars:
@@ -1344,12 +1374,22 @@ class Environment:
         self.vars[name] = value
 
     def get_topic(self) -> Any:
+        """主題の値。未設定なら None（主題が 無 の場合も None を返す）。"""
         env = self
         while env:
-            if env.topic is not None:
+            if env.topic is not _NO_TOPIC:
                 return env.topic
             env = env.parent
         return None
+
+    def has_topic(self) -> bool:
+        """〜について ブロックの内側かどうか。主題が 無 でも True。"""
+        env = self
+        while env:
+            if env.topic is not _NO_TOPIC:
+                return True
+            env = env.parent
+        return False
 
 
 class Race:
@@ -1475,18 +1515,19 @@ class Evaluator:
             return inst
         if isinstance(node, Ident):
             if node.name == "主題":
-                t = env.get_topic()
-                if t is None:
+                if not env.has_topic():
                     raise RuntimeYuiError("「主題」は〜について ブロックの内側でのみ使えます")
-                return t
+                return env.get_topic()
             if env.has(node.name):
                 return env.get(node.name)
-            # 組み込み関数を引数なし呼び出しとして試す（主題ブロック内では主題を「を」に渡す）
+            # 組み込み関数を引数なし呼び出しとして試す。
+            # 主題ブロック内なら主題を渡すが、受け皿の助詞は関数によって違う
+            # （追加なら「に」、番目取り出すなら「から」）。一律「を」に入れると
+            # 追加が配列を自分自身に追加するような呼び出しになってしまう。
             if node.name in _BUILTINS:
                 args: dict[str, Any] = {}
-                topic = env.get_topic()
-                if topic is not None:
-                    args["を"] = topic
+                if env.has_topic():
+                    args[_TOPIC_PARTICLE.get(node.name, "を")] = env.get_topic()
                 return _invoke_builtin(node.name, args, env)
             raise RuntimeYuiError(f"未定義の名前：{node.name}")
 

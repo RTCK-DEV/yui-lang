@@ -65,9 +65,9 @@ def escape_for_template_literal(src: str) -> str:
 def render_block() -> str:
     core = io.open(CORE, encoding="utf-8").read().rstrip("\n")
     stdlib = escape_for_template_literal(io.open(STDLIB, encoding="utf-8").read().rstrip("\n"))
-    # 説明用のキー（_ で始まる）は実行時に不要なので落とす
+    # 落とすのは説明文だけ。_主題の助詞 は実行時に使うので残す。
     raw = json.load(io.open(ARG_TYPES, encoding="utf-8"))
-    sigs = {k: v for k, v in raw.items() if not k.startswith("_")}
+    sigs = {k: v for k, v in raw.items() if k != "_説明"}
     types = json.dumps(sigs, ensure_ascii=False, indent=2)
     return (f"{BEGIN}\n{core}\n\n"
             f"const BUILTIN_ARG_TYPES = {types};\n\n"

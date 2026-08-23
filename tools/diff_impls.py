@@ -7,7 +7,8 @@
 
     python3 tools/diff_impls.py              # 組み込み関数 × 引数型 の総当たり
     python3 tools/diff_impls.py --ops        # 演算子 × 型の組み合わせ
-    python3 tools/diff_impls.py --all        # 両方
+    python3 tools/diff_impls.py --topic      # 主題ブロック経由の呼び出し
+    python3 tools/diff_impls.py --all        # 全部
 
 node が必要（repl.html の JS を Node の vm 上で動かすため）。
 
@@ -103,6 +104,24 @@ def builtin_sources() -> dict[str, str]:
     return src
 
 
+def topic_sources() -> dict[str, str]:
+    """主題ブロックの内側で、助詞を書かずに呼ぶ形。
+
+    助詞を明示する呼び出しとは別経路（暗黙に主題が渡る）なので、
+    型検査の抜けがここだけに残ることがある。実際、型署名を入れた直後は
+    この経路だけで 18 件の食い違いが残っていた。
+    """
+    src = {}
+    for name in sorted(yui._BUILTINS):
+        if name in SKIP:
+            continue
+        for tname, lit in VALUES.items():
+            src[f"主題 {name}｜{tname}"] = (
+                f"x を {lit} とする\nxについて\n    ({name}) を 表示せよ\nおわり"
+            )
+    return src
+
+
 def operator_sources() -> dict[str, str]:
     src = {}
     for op in ["+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">="]:
@@ -136,15 +155,19 @@ def report(sources: dict[str, str]) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description="2つの実装の挙動差を測る")
     ap.add_argument("--ops", action="store_true", help="演算子 × 型の組み合わせを比較")
-    ap.add_argument("--all", action="store_true", help="組み込みと演算子の両方")
+    ap.add_argument("--topic", action="store_true", help="主題ブロック経由の呼び出しを比較")
+    ap.add_argument("--all", action="store_true", help="全部")
     a = ap.parse_args()
 
-    if a.all or not a.ops:
+    selected = a.ops or a.topic
+    if a.all or not selected:
         print("── 組み込み関数 × 引数型 ──")
         report(builtin_sources())
+    if a.all or a.topic:
+        print("\n── 主題ブロック経由 ──" if (a.all or not a.topic) else "── 主題ブロック経由 ──")
+        report(topic_sources())
     if a.all or a.ops:
-        if a.all:
-            print("\n── 演算子 × 型 ──")
+        print("\n── 演算子 × 型 ──" if (a.all or not a.ops) else "── 演算子 × 型 ──")
         report(operator_sources())
     return 0
 

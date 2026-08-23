@@ -823,7 +823,7 @@ class Environment {
     this.vars = new Map();
     this.consts = new Set();
     this.parent = parent;
-    this.topic = null;
+    this.topic = NO_TOPIC;
   }
   has(name) { return this.vars.has(name) || (this.parent && this.parent.has(name)); }
   get(name) {
@@ -849,10 +849,17 @@ class Environment {
     }
     this.vars.set(name, value);
   }
+  /** 主題の値。未設定なら null（主題が 無 の場合も null）。 */
   getTopic() {
     let e = this;
-    while (e) { if (e.topic !== null) return e.topic; e = e.parent; }
+    while (e) { if (e.topic !== NO_TOPIC) return e.topic; e = e.parent; }
     return null;
+  }
+  /** 〜について ブロックの内側かどうか。主題が 無 でも true。 */
+  hasTopic() {
+    let e = this;
+    while (e) { if (e.topic !== NO_TOPIC) return true; e = e.parent; }
+    return false;
   }
 }
 
@@ -875,6 +882,13 @@ class YuiFunction {
     return null;
   }
 }
+/**
+ * 主題が設定されていないことを表す番兵。yui.py の _NO_TOPIC と対。
+ * null を「未設定」の印に使うと主題そのものが 無 のときに区別できず、
+ * `無について ... おわり` の内側で「主題」がブロック外と誤判定されていた。
+ */
+const NO_TOPIC = Symbol("主題なし");
+
 class ReturnSignal { constructor(v) { this.value = v; } }
 class BreakSignal {}
 class ContinueSignal {}
@@ -990,6 +1004,7 @@ function matchesType(v, t) {
     case "辞書":               return v !== null && typeof v === "object" && !Array.isArray(v);
     case "文字列または配列":     return typeof v === "string" || Array.isArray(v);
     case "文字列・配列・辞書":   return typeof v === "string" || (v !== null && typeof v === "object");
+    case "任意":               return true;
     case "数値または文字列":     return typeof v === "number" || typeof v === "string";
     default: throw new RuntimeYuiError(`builtin_types.json に未知の型名：${t}`);
   }
@@ -998,34 +1013,41 @@ function matchesType(v, t) {
 /**
  * 渡された引数が型署名に合うか確かめる。yui.py の _check_arg_types と対。
  *
- * 署名に無い助詞と、渡されなかった助詞は検査しない。主題ブロックで暗黙に
- * 渡される値も助詞として現れないため対象外。
- * 助詞の頭の * は必須の印で、渡されなければその時点でエラーにする。
+ * 署名に無い助詞は検査しない。助詞の頭の * は必須の印で、渡されなければ
+ * その時点でエラーにする。
+ * 主題ブロックの内側では助詞を書かずに呼べるため、その値も検査する。
+ * 主題がどの助詞の位置に入るかは _主題の助詞 で決まる（既定は「を」）。
  *
  * BUILTIN_ARG_TYPES は builtin_types.json の内容で、
  * tools/build_html.py が生成ブロックへ埋め込む。
  */
-function checkArgTypes(name, args) {
-  const sig = (typeof BUILTIN_ARG_TYPES !== "undefined" && BUILTIN_ARG_TYPES) ? BUILTIN_ARG_TYPES[name] : null;
+function checkArgTypes(name, args, topic = [false, null]) {
+  const all = (typeof BUILTIN_ARG_TYPES !== "undefined" && BUILTIN_ARG_TYPES) ? BUILTIN_ARG_TYPES : null;
+  const sig = all ? all[name] : null;
   if (!sig) return;
+  const topicParticle = (all["_主題の助詞"] || {})[name] || "を";
+  const [hasTopic, topicValue] = topic;
   for (const [key, want] of Object.entries(sig)) {
     const required = key.startsWith("*");
     const particle = required ? key.slice(1) : key;
-    if (!(particle in args)) {
+    let v, fromArgs = false;
+    if (particle in args) { v = args[particle]; fromArgs = true; }
+    else if (hasTopic && particle === topicParticle) { v = topicValue; }
+    else {
       if (required) throw new RuntimeYuiError(`「${name}」には「${particle}」が必要です`);
       continue;
     }
-    const v = args[particle];
     if (!matchesType(v, want)) {
+      const where = fromArgs ? `の「${particle}」` : "に渡された主題";
       throw new RuntimeYuiError(
-        `「${name}」の「${particle}」は ${want} である必要があります（${yuiTypeName(v)} が渡されました）`
+        `「${name}」${where}は ${want} である必要があります（${yuiTypeName(v)} が渡されました）`
       );
     }
   }
 }
 
 function invokeBuiltin(name, args, env) {
-  checkArgTypes(name, args);
+  checkArgTypes(name, args, [env.hasTopic(), env.getTopic()]);
   try {
     return BUILTINS[name](args, env);
   } catch (e) {
@@ -1139,15 +1161,19 @@ const Evaluator = {
       }
       case "Ident": {
         if (node.name === "主題") {
-          const t = env.getTopic();
-          if (t === null) throw new RuntimeYuiError("「主題」は〜について ブロックの内側でのみ使えます");
-          return t;
+          if (!env.hasTopic()) throw new RuntimeYuiError("「主題」は〜について ブロックの内側でのみ使えます");
+          return env.getTopic();
         }
         if (env.has(node.name)) return env.get(node.name);
         if (node.name in BUILTINS) {
+          // 主題の受け皿の助詞は関数によって違う（追加なら「に」）。
+          // 一律「を」に入れると、追加が配列を自分自身に追加する呼び出しになる。
           const args = {};
-          const topic = env.getTopic();
-          if (topic !== null) args["を"] = topic;
+          if (env.hasTopic()) {
+            const all = (typeof BUILTIN_ARG_TYPES !== "undefined" && BUILTIN_ARG_TYPES) ? BUILTIN_ARG_TYPES : {};
+            const tp = (all["_主題の助詞"] || {})[node.name] || "を";
+            args[tp] = env.getTopic();
+          }
           return invokeBuiltin(node.name, args, env);
         }
         throw new RuntimeYuiError(`未定義の名前：${node.name}`);
