@@ -971,13 +971,18 @@ function interpolate(text, env) {
       const j = text.indexOf("}", i);
       if (j === -1) throw new RuntimeYuiError("文字列補間：}が閉じていません");
       const exprSrc = text.slice(i+1, j);
+      let tree;
       try {
-        const tokens = tokenize(exprSrc);
-        const tree = new Parser(tokens).parseCallOrExpr();
-        out += yuiToStr(Evaluator.eval(tree, env));
+        // 補間式は parseExprFrom と同じ「式優先・余ったら呼び出し」順で解釈する。
+        // parseCallOrExpr を直に呼ぶと、比較の右辺が識別子のとき
+        // （『{x が B 以下}』）動詞句が「B以下」になってしまう。
+        const toks = tokenize(exprSrc).filter(t => t.kind !== "NEWLINE" && t.kind !== "EOF");
+        tree = new Parser(toks).parseExprFrom(toks);
       } catch (e) {
         throw new RuntimeYuiError(`補間式「${exprSrc}」の解析失敗：${e.message}`);
       }
+      // 評価は try の外。実行時エラーを「解析失敗」と誤ってラベルしないため。
+      out += yuiToStr(Evaluator.eval(tree, env));
       i = j + 1;
     } else if (c === "") { out += "{"; i++; }
     else if (c === "") { out += "}"; i++; }
@@ -1459,6 +1464,7 @@ function dumpEnv(env) {
 /* ============================================================
  * UI
  * ============================================================ */
+/* ── STDLIB:BEGIN ── tools/build_repl.py が stdlib.yui から生成する。直接編集しないこと ── */
 const STDLIB_SRC = `※ ════════════════════════════════════════════════════════════
 ※   結（Yui）標準ライブラリ stdlib.yui
 ※   著作権表記：RTCK
@@ -1628,6 +1634,7 @@ const STDLIB_SRC = `※ ══════════════════�
     戻り値：結果
 おわり
 `;
+/* ── STDLIB:END ── */
 
 const SAMPLES = {
   "ハロー・ワールド": `※ ハロー・ワールド

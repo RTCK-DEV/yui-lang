@@ -100,6 +100,8 @@ python3 yui.py
 | `ai_dialog.html` | 複数のAIキャラクター同士を会話させるマルチエージェント実験 |
 | `ai_branch.html` | AI生成による分岐ツリーの可視化実験 |
 | `samples/` | サンプル21本 |
+| `tools/build_repl.py` | `stdlib.yui` を `repl.html` へ埋め込むビルドスクリプト |
+| `tests/` | テスト。`cases.json` を2つの実装が共有する |
 
 `ai_*.html` は [WebLLM](https://github.com/mlc-ai/web-llm) を使うため **WebGPU対応ブラウザ** が必要。初回はモデル（約1.5GB）のダウンロードが走る。
 
@@ -129,6 +131,34 @@ python3 yui.py
 - 漢数字単独は数値リテラルとして扱われる（変数名に使う場合は他の文字を含める）
 - ブラウザ版は `読み込む` が無効（同期ファイル取得不可のため）
 - ブラウザ版は整数と小数を型として区別しない（JavaScript の `Number` を使うため）。結果が整数値になる小数演算の表示が Python 実装と食い違う
+- 組み込みの `文字列にする` / `整数にする` / `小数にする` は名前に助詞「に」を含むため直接呼び出せない（未修正）。高階関数経由なら到達できる
+- 混合型の演算（`「42」 + 0` など）の意味は未規定で、2つの実装で結果が食い違う
+
+---
+
+## 開発
+
+テストは外部依存なしで走る。追加のインストールは要らない。
+
+```bash
+python3 tests/run_tests.py    # Python 実装 + ビルド同期チェック + サンプル実行
+node tests/js_test.mjs        # ブラウザ実装（Node だけで動く。ブラウザ不要）
+```
+
+`tests/js_test.mjs` は `repl.html` の `<script>` を取り出し、最小限の DOM スタブとともに Node の `vm` 上で実行する。ブラウザも Playwright も要らない。
+
+テストケースは `tests/cases.json` に置いてあり、2つの実装が同じファイルを読む。未解決の不具合は `known_failure` を付けたまま残してあり、終了コードには影響しないが実行のたびに一覧表示される。
+
+### stdlib のビルド
+
+`repl.html` は単一HTMLで完結させるため、`stdlib.yui` の内容を JS のテンプレートリテラルとして埋め込んでいる。真実は `stdlib.yui` 側だけに置き、埋め込みブロックは生成する。
+
+```bash
+python3 tools/build_repl.py           # stdlib.yui から repl.html の該当ブロックを再生成
+python3 tools/build_repl.py --check   # 同期していなければ差分を出して終了コード1
+```
+
+`stdlib.yui` を編集したらビルドを走らせること。走らせ忘れは両方のテストが検出する。
 
 ---
 

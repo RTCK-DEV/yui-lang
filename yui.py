@@ -1046,6 +1046,42 @@ class Parser:
 # =============================================================================
 
 class RuntimeYuiError(Exception): pass
+
+
+def yui_type_name(v: Any) -> str:
+    """値の型を Yui の用語で返す。エラーメッセージ用。"""
+    if v is None: return "無"
+    if isinstance(v, bool): return "真偽"
+    if isinstance(v, int): return "整数"
+    if isinstance(v, float): return "小数"
+    if isinstance(v, str): return "文字列"
+    if isinstance(v, list): return "配列"
+    if isinstance(v, dict): return "辞書"
+    return type(v).__name__
+
+
+def _div(l: Any, r: Any) -> Any:
+    """整数どうしで割り切れる場合だけ整数を返す。それ以外は小数。"""
+    if isinstance(l, int) and isinstance(r, int) and r != 0 and l % r == 0:
+        return l // r
+    return l / r
+
+
+# 二項演算子の実体。TypeError / ZeroDivisionError は呼び出し側で
+# RuntimeYuiError に変換する（Python の例外をそのまま利用者に見せない）。
+_BINOPS = {
+    "+":  lambda l, r: l + r,
+    "-":  lambda l, r: l - r,
+    "*":  lambda l, r: l * r,
+    "/":  _div,
+    "%":  lambda l, r: l % r,
+    "==": lambda l, r: l == r,
+    "!=": lambda l, r: l != r,
+    "<":  lambda l, r: l < r,
+    ">":  lambda l, r: l > r,
+    "<=": lambda l, r: l <= r,
+    ">=": lambda l, r: l >= r,
+}
 class ReturnSignal(Exception):
     def __init__(self, value): self.value = value
 class BreakSignal(Exception): pass
@@ -1065,9 +1101,12 @@ def _interpolate(text: str, env: "Environment") -> str:
                 raise RuntimeYuiError("文字列補間：}が閉じていません")
             expr_src = text[i+1:j]
             try:
-                tokens = tokenize(expr_src)
-                parser = Parser(tokens)
-                tree = parser._parse_call_or_expr()
+                # 補間式は _parse_expr_from と同じ「式優先・余ったら呼び出し」順で
+                # 解釈する。_parse_call_or_expr を直に呼ぶと、比較の右辺が識別子の
+                # とき（『{x が B 以下}』）動詞句が「B以下」になってしまう。
+                toks = [t for t in tokenize(expr_src)
+                        if t.kind not in ("NEWLINE", "EOF")]
+                tree = Parser(list(toks))._parse_expr_from(toks)
             except (LexError, ParseError) as e:
                 raise RuntimeYuiError(f"補間式「{expr_src}」の解析失敗：{e}")
             val = Evaluator.eval_node(tree, env)
@@ -1269,27 +1308,28 @@ class Evaluator:
             l = Evaluator.eval_node(node.left, env)
             r = Evaluator.eval_node(node.right, env)
             op = node.op
-            if op == "+":  return l + r
-            if op == "-":  return l - r
-            if op == "*":  return l * r
-            if op == "/":
-                if isinstance(l, int) and isinstance(r, int) and r != 0 and l % r == 0:
-                    return l // r
-                return l / r
-            if op == "%":  return l % r
-            if op == "==": return l == r
-            if op == "!=": return l != r
-            if op == "<":  return l < r
-            if op == ">":  return l > r
-            if op == "<=": return l <= r
-            if op == ">=": return l >= r
             if op == "and": return bool(l) and bool(r)
             if op == "or":  return bool(l) or bool(r)
-            raise RuntimeYuiError(f"未対応の演算子：{op}")
+            if op not in _BINOPS:
+                raise RuntimeYuiError(f"未対応の演算子：{op}")
+            try:
+                return _BINOPS[op](l, r)
+            except ZeroDivisionError:
+                raise RuntimeYuiError("0で割ることはできません") from None
+            except TypeError:
+                raise RuntimeYuiError(
+                    f"「{op}」は {yui_type_name(l)} と {yui_type_name(r)} には使えません"
+                ) from None
 
         if isinstance(node, UnaryOp):
             v = Evaluator.eval_node(node.operand, env)
-            if node.op == "neg": return -v
+            if node.op == "neg":
+                try:
+                    return -v
+                except TypeError:
+                    raise RuntimeYuiError(
+                        f"符号反転は {yui_type_name(v)} には使えません"
+                    ) from None
             if node.op == "not": return not bool(v)
 
         if isinstance(node, Assign):
