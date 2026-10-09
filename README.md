@@ -35,7 +35,7 @@
 必要なもの: **Python 3.10 以降**（標準ライブラリのみ。外部依存なし）
 
 ```bash
-git clone https://github.com/RTCK-reina/yui-lang.git
+git clone https://github.com/RTCK-DEV/yui-lang.git
 cd yui-lang
 
 # ファイルを実行
